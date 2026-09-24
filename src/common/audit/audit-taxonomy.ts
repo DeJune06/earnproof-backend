@@ -313,6 +313,23 @@ export const AUDIT_EVENTS: readonly AuditEventDefinition[] = [
       "A proof was revoked by its owner or an administrator; the free-form private " +
       "reason and any evidence hash are kept on the proof row, never in this log.",
   },
+  {
+    type: "anchoring_intent.retried",
+    domain: "proof",
+    store: "audit_log",
+    match: {
+      store: "audit_log",
+      action: "anchoring_intent.retried",
+      resourceType: "proof",
+    },
+    actorTypes: ["user"],
+    outcomes: ["success"],
+    tenant: "resource_id",
+    writeFailure: "fail_closed",
+    requiredMetadata: ["intentId", "requeuedAt"],
+    description:
+      "An operator manually requeued a permanently-failed anchoring intent for retry.",
+  },
   // ------------------------------------------------------------- api key ---
   {
     type: "api_key.created",

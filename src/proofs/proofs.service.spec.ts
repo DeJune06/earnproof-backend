@@ -491,6 +491,279 @@ describe("ProofsService", () => {
     );
   });
 
+  describe("getProofAnchoringStatus", () => {
+    it("returns the owner's anchoring intents, redacted-only", async () => {
+      const prisma = {
+        proof: { findFirst: jest.fn().mockResolvedValue({ id: "proof_1" }) },
+        anchoringIntent: {
+          findMany: jest.fn().mockResolvedValue([
+            {
+              id: "intent_1",
+              operation: "REGISTER",
+              status: "FAILED",
+              attemptCount: 10,
+              lastAttemptAt: new Date("2026-01-01T00:00:00.000Z"),
+              nextRetryAt: null,
+              lastErrorSafe: "[REDACTED_ADDRESS]: insufficient balance",
+              permanentError: true,
+              transactionHash: null,
+            },
+          ]),
+        },
+      };
+      const service = new ProofsService(
+        prisma as never,
+        config as never,
+        mockVerificationEventService,
+      );
+
+      const result = await service.getProofAnchoringStatus(user, "proof_1");
+
+      expect(prisma.proof.findFirst).toHaveBeenCalledWith({
+        where: { id: "proof_1", userId: "user_1" },
+        select: { id: true },
+      });
+      expect(result.proofId).toBe("proof_1");
+      expect(result.intents).toHaveLength(1);
+      expect(result.intents[0]).toMatchObject({
+        id: "intent_1",
+        status: "FAILED",
+        permanentError: true,
+        lastErrorSafe: "[REDACTED_ADDRESS]: insufficient balance",
+      });
+    });
+
+    it("lets an administrator view anchoring status for a proof they do not own", async () => {
+      const prisma = {
+        proof: { findFirst: jest.fn().mockResolvedValue({ id: "proof_1" }) },
+        anchoringIntent: { findMany: jest.fn().mockResolvedValue([]) },
+      };
+      const service = new ProofsService(
+        prisma as never,
+        config as never,
+        mockVerificationEventService,
+      );
+
+      const admin = { ...user, id: "admin_1", role: "ADMIN" };
+      await service.getProofAnchoringStatus(admin, "proof_1");
+
+      expect(prisma.proof.findFirst).toHaveBeenCalledWith({
+        where: { id: "proof_1" },
+        select: { id: true },
+      });
+    });
+
+    it("throws NotFoundException for a proof the caller cannot see", async () => {
+      const prisma = {
+        proof: { findFirst: jest.fn().mockResolvedValue(null) },
+        anchoringIntent: { findMany: jest.fn() },
+      };
+      const service = new ProofsService(
+        prisma as never,
+        config as never,
+        mockVerificationEventService,
+      );
+
+      await expect(
+        service.getProofAnchoringStatus(user, "someone_elses_proof"),
+      ).rejects.toThrow("Proof not found");
+      expect(prisma.anchoringIntent.findMany).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("retryProofAnchoring", () => {
+    it("requeues a permanently-failed intent without resetting its attempt count", async () => {
+      const prisma = {
+        proof: { findFirst: jest.fn().mockResolvedValue({ id: "proof_1" }) },
+        anchoringIntent: {
+          findFirst: jest.fn().mockResolvedValue({
+            id: "intent_1",
+            proofId: "proof_1",
+            status: "FAILED",
+            permanentError: true,
+            attemptCount: 10,
+          }),
+        },
+        $transaction: jest.fn().mockImplementation(async (fn: (tx: unknown) => unknown) =>
+          fn({
+            anchoringIntent: {
+              update: jest.fn().mockResolvedValue({
+                id: "intent_1",
+                status: "PENDING",
+                attemptCount: 10,
+              }),
+            },
+            auditLog: { create: jest.fn().mockResolvedValue({}) },
+          }),
+        ),
+      };
+      const service = new ProofsService(
+        prisma as never,
+        config as never,
+        mockVerificationEventService,
+      );
+
+      const result = await service.retryProofAnchoring(user, "proof_1", "intent_1");
+
+      expect(result).toEqual({
+        intentId: "intent_1",
+        status: "PENDING",
+        attemptCount: 10,
+      });
+    });
+
+    it("refuses to retry a PENDING intent (already scheduled to retry itself)", async () => {
+      const prisma = {
+        proof: { findFirst: jest.fn().mockResolvedValue({ id: "proof_1" }) },
+        anchoringIntent: {
+          findFirst: jest.fn().mockResolvedValue({
+            id: "intent_1",
+            proofId: "proof_1",
+            status: "PENDING",
+            permanentError: false,
+            attemptCount: 2,
+          }),
+        },
+        $transaction: jest.fn(),
+      };
+      const service = new ProofsService(
+        prisma as never,
+        config as never,
+        mockVerificationEventService,
+      );
+
+      await expect(
+        service.retryProofAnchoring(user, "proof_1", "intent_1"),
+      ).rejects.toThrow(/not eligible for retry/);
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
+
+    it("refuses to retry a PROCESSING intent (cannot duplicate an in-flight attempt)", async () => {
+      const prisma = {
+        proof: { findFirst: jest.fn().mockResolvedValue({ id: "proof_1" }) },
+        anchoringIntent: {
+          findFirst: jest.fn().mockResolvedValue({
+            id: "intent_1",
+            proofId: "proof_1",
+            status: "PROCESSING",
+            permanentError: false,
+            attemptCount: 3,
+          }),
+        },
+        $transaction: jest.fn(),
+      };
+      const service = new ProofsService(
+        prisma as never,
+        config as never,
+        mockVerificationEventService,
+      );
+
+      await expect(
+        service.retryProofAnchoring(user, "proof_1", "intent_1"),
+      ).rejects.toThrow(/not eligible for retry/);
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
+
+    it("refuses to retry a CONFIRMED intent (cannot duplicate a completed anchoring)", async () => {
+      const prisma = {
+        proof: { findFirst: jest.fn().mockResolvedValue({ id: "proof_1" }) },
+        anchoringIntent: {
+          findFirst: jest.fn().mockResolvedValue({
+            id: "intent_1",
+            proofId: "proof_1",
+            status: "CONFIRMED",
+            permanentError: false,
+            attemptCount: 1,
+          }),
+        },
+        $transaction: jest.fn(),
+      };
+      const service = new ProofsService(
+        prisma as never,
+        config as never,
+        mockVerificationEventService,
+      );
+
+      await expect(
+        service.retryProofAnchoring(user, "proof_1", "intent_1"),
+      ).rejects.toThrow(/not eligible for retry/);
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
+
+    it("refuses a retry for a proof the caller does not own and is not an administrator for", async () => {
+      const prisma = {
+        proof: { findFirst: jest.fn().mockResolvedValue(null) },
+        anchoringIntent: { findFirst: jest.fn() },
+        $transaction: jest.fn(),
+      };
+      const service = new ProofsService(
+        prisma as never,
+        config as never,
+        mockVerificationEventService,
+      );
+
+      await expect(
+        service.retryProofAnchoring(user, "someone_elses_proof", "intent_1"),
+      ).rejects.toThrow("Proof not found");
+      expect(prisma.anchoringIntent.findFirst).not.toHaveBeenCalled();
+    });
+
+    it("throws NotFoundException when the intent does not belong to the given proof", async () => {
+      const prisma = {
+        proof: { findFirst: jest.fn().mockResolvedValue({ id: "proof_1" }) },
+        anchoringIntent: { findFirst: jest.fn().mockResolvedValue(null) },
+        $transaction: jest.fn(),
+      };
+      const service = new ProofsService(
+        prisma as never,
+        config as never,
+        mockVerificationEventService,
+      );
+
+      await expect(
+        service.retryProofAnchoring(user, "proof_1", "wrong_intent"),
+      ).rejects.toThrow("Anchoring intent not found for this proof");
+    });
+
+    it("fails the whole retry when the audit write fails, leaving the intent unchanged from the caller's perspective", async () => {
+      const prisma = {
+        proof: { findFirst: jest.fn().mockResolvedValue({ id: "proof_1" }) },
+        anchoringIntent: {
+          findFirst: jest.fn().mockResolvedValue({
+            id: "intent_1",
+            proofId: "proof_1",
+            status: "FAILED",
+            permanentError: true,
+            attemptCount: 5,
+          }),
+        },
+        $transaction: jest.fn().mockImplementation(async (fn: (tx: unknown) => unknown) =>
+          fn({
+            anchoringIntent: {
+              update: jest.fn().mockResolvedValue({
+                id: "intent_1",
+                status: "PENDING",
+                attemptCount: 5,
+              }),
+            },
+            auditLog: {
+              create: jest.fn().mockRejectedValue(new Error("audit store unavailable")),
+            },
+          }),
+        ),
+      };
+      const service = new ProofsService(
+        prisma as never,
+        config as never,
+        mockVerificationEventService,
+      );
+
+      await expect(
+        service.retryProofAnchoring(user, "proof_1", "intent_1"),
+      ).rejects.toThrow("audit store unavailable");
+    });
+  });
+
   it("uses revoked on-chain status during public verification", async () => {
     const credential = {
       id: "proof_onchain_revoked",

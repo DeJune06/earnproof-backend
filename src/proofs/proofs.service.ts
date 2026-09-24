@@ -1490,4 +1490,112 @@ export class ProofsService {
       };
     }
   }
+
+  /**
+   * Proof-scoped anchoring status: the current AnchoringIntent state (at most
+   * one REGISTER and one REVOKE row, per the (proofId, operation) unique
+   * constraint). This is a live snapshot, not a per-attempt history — the
+   * schema keeps one mutable row per operation, overwritten on each attempt.
+   */
+  async getProofAnchoringStatus(user: AuthenticatedUser, proofId: string) {
+    const proof = await this.prisma.proof.findFirst({
+      where:
+        user.role === "ADMIN" ? { id: proofId } : { id: proofId, userId: user.id },
+      select: { id: true },
+    });
+
+    if (!proof) {
+      throw new NotFoundException("Proof not found");
+    }
+
+    const intents = await this.prisma.anchoringIntent.findMany({
+      where: { proofId: proof.id },
+      orderBy: { createdAt: "asc" },
+    });
+
+    return {
+      proofId: proof.id,
+      intents: intents.map((intent) => ({
+        id: intent.id,
+        operation: intent.operation,
+        status: intent.status,
+        attemptCount: intent.attemptCount,
+        lastAttemptAt: intent.lastAttemptAt?.toISOString() ?? null,
+        nextRetryAt: intent.nextRetryAt?.toISOString() ?? null,
+        lastErrorSafe: intent.lastErrorSafe,
+        permanentError: intent.permanentError,
+        transactionHash: intent.transactionHash,
+      })),
+    };
+  }
+
+  /**
+   * Requeue a permanently-failed anchoring intent for the worker to retry.
+   *
+   * Deliberately does not invoke the CLI synchronously: the worker's poll
+   * loop already owns claiming (`FOR UPDATE SKIP LOCKED`) and backoff, so
+   * this only flips FAILED -> PENDING with nextRetryAt = now and lets that
+   * machinery pick it up. attemptCount is preserved (not reset), so
+   * MAX_ATTEMPTS and the backoff curve still apply to a retried intent.
+   */
+  async retryProofAnchoring(user: AuthenticatedUser, proofId: string, intentId: string) {
+    const proof = await this.prisma.proof.findFirst({
+      where:
+        user.role === "ADMIN" ? { id: proofId } : { id: proofId, userId: user.id },
+      select: { id: true },
+    });
+
+    if (!proof) {
+      throw new NotFoundException("Proof not found");
+    }
+
+    const intent = await this.prisma.anchoringIntent.findFirst({
+      where: { id: intentId, proofId: proof.id },
+    });
+
+    if (!intent) {
+      throw new NotFoundException("Anchoring intent not found for this proof");
+    }
+
+    // Processing or confirmed intents cannot be duplicated: only a terminal,
+    // permanently-failed intent is eligible for a manual retry. A PENDING
+    // intent is already going to retry on its own schedule.
+    if (intent.status !== AnchoringStatus.FAILED || !intent.permanentError) {
+      throw new UnprocessableEntityException(
+        `Anchoring intent ${intentId} is not eligible for retry (status: ${intent.status}, permanentError: ${intent.permanentError})`,
+      );
+    }
+
+    const requeuedAt = new Date();
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const result = await tx.anchoringIntent.update({
+        where: { id: intentId },
+        data: {
+          status: AnchoringStatus.PENDING,
+          permanentError: false,
+          nextRetryAt: requeuedAt,
+        },
+        select: { id: true, status: true, attemptCount: true },
+      });
+
+      await tx.auditLog.create({
+        data: {
+          actorType: "user",
+          actorId: user.id,
+          action: "anchoring_intent.retried",
+          resourceType: "proof",
+          resourceId: proof.id,
+          metadata: { intentId, requeuedAt: requeuedAt.toISOString() },
+        },
+      });
+
+      return result;
+    });
+
+    return {
+      intentId: updated.id,
+      status: updated.status,
+      attemptCount: updated.attemptCount,
+    };
+  }
 }

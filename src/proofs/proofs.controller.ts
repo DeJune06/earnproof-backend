@@ -21,6 +21,7 @@ import { AuthenticatedUser } from "../auth/auth.types";
 import { CurrentUser } from "../common/decorators/current-user.decorator";
 import { ApiErrorDto } from "../common/dto/api-error.dto";
 import { AuthGuard } from "../common/guards/auth.guard";
+import { ProofAnchoringStatusResponseDto } from "./dto/anchoring-intent-status.dto";
 import { CreateMinimumIncomeProofDto } from "./dto/create-minimum-income-proof.dto";
 import { CreatePaymentReceiptProofDto } from "./dto/create-payment-receipt-proof.dto";
 import { CreateRecurringIncomeProofDto } from "./dto/create-recurring-income-proof.dto";
@@ -30,6 +31,7 @@ import {
   ProofDetailResponseDto,
   ProofListResponseDto,
 } from "./dto/proof-history-response.dto";
+import { RetryAnchoringResponseDto } from "./dto/retry-anchoring-response.dto";
 import { RevokeProofDto } from "./dto/revoke-proof.dto";
 import { RevokeProofResponseDto } from "./dto/revoke-proof-response.dto";
 import { VerifyProofResponseDto } from "./dto/verify-proof-response.dto";
@@ -258,6 +260,96 @@ export class ProofsController {
     @Body() body?: RevokeProofDto,
   ) {
     return this.proofsService.revokeProof(user, id, body);
+  }
+
+  @ApiOperation({
+    summary: "Get a proof's anchoring status",
+    description:
+      "Returns the current on-chain anchoring intent(s) for a proof (at most one REGISTER " +
+      "and one REVOKE). This is a live status snapshot, not a per-attempt history: the " +
+      "schema keeps one row per operation, overwritten on each attempt. Any failure detail " +
+      "returned is already redacted. Available to the proof's owner or an administrator.",
+  })
+  @ApiBearerAuth()
+  @ApiParam({
+    name: "id",
+    description: "Proof ID (uuid).",
+    example: "018e1234-abcd-7000-8000-abcdef012345",
+  })
+  @ApiResponse({
+    status: HttpStatus.OK,
+    description: "Anchoring status for the proof.",
+    type: ProofAnchoringStatusResponseDto,
+  })
+  @ApiResponse({
+    status: HttpStatus.NOT_FOUND,
+    description: "Proof not found, or does not belong to the authenticated user.",
+    type: ApiErrorDto,
+  })
+  @ApiResponse({
+    status: HttpStatus.UNAUTHORIZED,
+    description: "Bearer token is missing, malformed, invalid, or expired.",
+    type: ApiErrorDto,
+  })
+  @UseGuards(AuthGuard)
+  @Get(":id/anchoring")
+  getProofAnchoringStatus(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param("id") id: string,
+  ) {
+    return this.proofsService.getProofAnchoringStatus(user, id);
+  }
+
+  @ApiOperation({
+    summary: "Retry a permanently-failed anchoring intent",
+    description:
+      "Requeues a FAILED, permanently-errored anchoring intent for the worker to retry on " +
+      "its next poll cycle. Does not invoke the chain synchronously. Only a permanently-" +
+      "failed intent is eligible; a PENDING intent is already scheduled to retry itself, and " +
+      "a PROCESSING or CONFIRMED intent cannot be retried. Available to the proof's owner or " +
+      "an administrator.",
+  })
+  @ApiBearerAuth()
+  @ApiParam({
+    name: "id",
+    description: "Proof ID (uuid).",
+    example: "018e1234-abcd-7000-8000-abcdef012345",
+  })
+  @ApiParam({
+    name: "intentId",
+    description: "Anchoring intent ID.",
+    example: "clx1abc2def3ghi4",
+  })
+  @ApiResponse({
+    status: HttpStatus.OK,
+    description: "The intent was requeued.",
+    type: RetryAnchoringResponseDto,
+  })
+  @ApiResponse({
+    status: HttpStatus.NOT_FOUND,
+    description:
+      "Proof not found, does not belong to the authenticated user, or the intent does not " +
+      "belong to this proof.",
+    type: ApiErrorDto,
+  })
+  @ApiResponse({
+    status: HttpStatus.UNPROCESSABLE_ENTITY,
+    description: "The intent is not eligible for retry (not permanently failed).",
+    type: ApiErrorDto,
+  })
+  @ApiResponse({
+    status: HttpStatus.UNAUTHORIZED,
+    description: "Bearer token is missing, malformed, invalid, or expired.",
+    type: ApiErrorDto,
+  })
+  @UseGuards(AuthGuard)
+  @Post(":id/anchoring/:intentId/retry")
+  retryProofAnchoring(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param("id") id: string,
+    @Param("intentId") intentId: string,
+  ) {
+    return this.proofsService.retryProofAnchoring(user, id, intentId);
   }
 
   @ApiOperation({

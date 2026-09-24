@@ -706,6 +706,57 @@ const scenarios: Scenario[] = [
       );
     },
   },
+  {
+    event: "anchoring_intent.retried",
+    outcome: "success",
+    name: "retrying a permanently-failed anchoring intent",
+    run: (sink) => {
+      const prisma = {
+        proof: {
+          findFirst: jest.fn().mockResolvedValue({ id: "proof_1" }),
+        },
+        anchoringIntent: {
+          findFirst: jest.fn().mockResolvedValue({
+            id: "intent_1",
+            proofId: "proof_1",
+            status: "FAILED",
+            permanentError: true,
+            attemptCount: 10,
+          }),
+        },
+        $transaction: jest.fn(async (callback: (tx: unknown) => unknown) =>
+          callback({
+            anchoringIntent: {
+              update: jest.fn().mockResolvedValue({
+                id: "intent_1",
+                status: "PENDING",
+                attemptCount: 10,
+              }),
+            },
+            auditLog: sink.auditLog,
+          }),
+        ),
+      };
+
+      return new ProofsService(
+        prisma as never,
+        configDouble({
+          credentialSigningSecret: "matrix-signing-secret",
+          "stellar.network": "testnet",
+        }),
+        { recordEvent: jest.fn() } as never,
+      ).retryProofAnchoring(
+        {
+          id: USER_ID,
+          walletAddress: "GTEST",
+          walletHash: `sha256:${"c".repeat(64)}`,
+          role: "WORKER",
+        },
+        "proof_1",
+        "intent_1",
+      );
+    },
+  },
 ];
 
 /** The record a scenario produced, normalised across the three stores. */
