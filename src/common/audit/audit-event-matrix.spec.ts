@@ -709,7 +709,7 @@ const scenarios: Scenario[] = [
   {
     event: "anchoring_intent.retried",
     outcome: "success",
-    name: "retrying a permanently-failed anchoring intent",
+    name: "retrying a quarantined anchoring intent",
     run: (sink) => {
       const prisma = {
         proof: {
@@ -719,9 +719,10 @@ const scenarios: Scenario[] = [
           findFirst: jest.fn().mockResolvedValue({
             id: "intent_1",
             proofId: "proof_1",
-            status: "FAILED",
+            status: "QUARANTINED",
             permanentError: true,
             attemptCount: 10,
+            quarantineDecision: "PENDING",
           }),
         },
         $transaction: jest.fn(async (callback: (tx: unknown) => unknown) =>
@@ -750,6 +751,56 @@ const scenarios: Scenario[] = [
           id: USER_ID,
           walletAddress: "GTEST",
           walletHash: `sha256:${"c".repeat(64)}`,
+          role: "WORKER",
+        },
+        "proof_1",
+        "intent_1",
+      );
+    },
+  },
+  {
+    event: "anchoring_intent.abandoned",
+    outcome: "success",
+    name: "abandoning a quarantined anchoring intent",
+    run: (sink) => {
+      const prisma = {
+        proof: {
+          findFirst: jest.fn().mockResolvedValue({ id: "proof_1" }),
+        },
+        anchoringIntent: {
+          findFirst: jest.fn().mockResolvedValue({
+            id: "intent_1",
+            proofId: "proof_1",
+            status: "QUARANTINED",
+            quarantineDecision: "PENDING",
+          }),
+        },
+        $transaction: jest.fn(async (callback: (tx: unknown) => unknown) =>
+          callback({
+            anchoringIntent: {
+              update: jest.fn().mockResolvedValue({
+                id: "intent_1",
+                status: "QUARANTINED",
+                quarantineDecision: "ABANDONED",
+              }),
+            },
+            auditLog: sink.auditLog,
+          }),
+        ),
+      };
+
+      return new ProofsService(
+        prisma as never,
+        configDouble({
+          credentialSigningSecret: "matrix-signing-secret",
+          "stellar.network": "testnet",
+        }),
+        { recordEvent: jest.fn() } as never,
+      ).abandonProofAnchoring(
+        {
+          id: USER_ID,
+          walletAddress: "GTEST",
+          walletHash: `sha256:${"d".repeat(64)}`,
           role: "WORKER",
         },
         "proof_1",

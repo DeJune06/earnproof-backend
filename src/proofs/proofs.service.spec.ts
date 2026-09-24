@@ -572,16 +572,17 @@ describe("ProofsService", () => {
   });
 
   describe("retryProofAnchoring", () => {
-    it("requeues a permanently-failed intent without resetting its attempt count", async () => {
+    it("requeues a quarantined intent without resetting its attempt count", async () => {
       const prisma = {
         proof: { findFirst: jest.fn().mockResolvedValue({ id: "proof_1" }) },
         anchoringIntent: {
           findFirst: jest.fn().mockResolvedValue({
             id: "intent_1",
             proofId: "proof_1",
-            status: "FAILED",
+            status: "QUARANTINED",
             permanentError: true,
             attemptCount: 10,
+            quarantineDecision: "PENDING",
           }),
         },
         $transaction: jest.fn().mockImplementation(async (fn: (tx: unknown) => unknown) =>
@@ -690,6 +691,33 @@ describe("ProofsService", () => {
       expect(prisma.$transaction).not.toHaveBeenCalled();
     });
 
+    it("refuses to redrive a quarantined intent that was already abandoned", async () => {
+      const prisma = {
+        proof: { findFirst: jest.fn().mockResolvedValue({ id: "proof_1" }) },
+        anchoringIntent: {
+          findFirst: jest.fn().mockResolvedValue({
+            id: "intent_1",
+            proofId: "proof_1",
+            status: "QUARANTINED",
+            permanentError: true,
+            attemptCount: 10,
+            quarantineDecision: "ABANDONED",
+          }),
+        },
+        $transaction: jest.fn(),
+      };
+      const service = new ProofsService(
+        prisma as never,
+        config as never,
+        mockVerificationEventService,
+      );
+
+      await expect(
+        service.retryProofAnchoring(user, "proof_1", "intent_1"),
+      ).rejects.toThrow(/not eligible for retry/);
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
+
     it("refuses a retry for a proof the caller does not own and is not an administrator for", async () => {
       const prisma = {
         proof: { findFirst: jest.fn().mockResolvedValue(null) },
@@ -732,9 +760,10 @@ describe("ProofsService", () => {
           findFirst: jest.fn().mockResolvedValue({
             id: "intent_1",
             proofId: "proof_1",
-            status: "FAILED",
+            status: "QUARANTINED",
             permanentError: true,
             attemptCount: 5,
+            quarantineDecision: "PENDING",
           }),
         },
         $transaction: jest.fn().mockImplementation(async (fn: (tx: unknown) => unknown) =>
@@ -760,6 +789,197 @@ describe("ProofsService", () => {
 
       await expect(
         service.retryProofAnchoring(user, "proof_1", "intent_1"),
+      ).rejects.toThrow("audit store unavailable");
+    });
+  });
+
+  describe("abandonProofAnchoring", () => {
+    it("marks a quarantined intent ABANDONED and records who decided it", async () => {
+      const prisma = {
+        proof: { findFirst: jest.fn().mockResolvedValue({ id: "proof_1" }) },
+        anchoringIntent: {
+          findFirst: jest.fn().mockResolvedValue({
+            id: "intent_1",
+            proofId: "proof_1",
+            status: "QUARANTINED",
+            quarantineDecision: "PENDING",
+          }),
+        },
+        $transaction: jest.fn().mockImplementation(async (fn: (tx: unknown) => unknown) =>
+          fn({
+            anchoringIntent: {
+              update: jest.fn().mockResolvedValue({
+                id: "intent_1",
+                status: "QUARANTINED",
+                quarantineDecision: "ABANDONED",
+              }),
+            },
+            auditLog: { create: jest.fn().mockResolvedValue({}) },
+          }),
+        ),
+      };
+      const service = new ProofsService(
+        prisma as never,
+        config as never,
+        mockVerificationEventService,
+      );
+
+      const result = await service.abandonProofAnchoring(user, "proof_1", "intent_1");
+
+      expect(result).toEqual({
+        intentId: "intent_1",
+        status: "QUARANTINED",
+        quarantineDecision: "ABANDONED",
+      });
+    });
+
+    it("never touches the proof itself: abandoning a REGISTER intent cannot mark an unanchored proof confirmed", async () => {
+      const proofUpdate = jest.fn();
+      const prisma = {
+        proof: {
+          findFirst: jest.fn().mockResolvedValue({ id: "proof_1" }),
+          update: proofUpdate,
+        },
+        anchoringIntent: {
+          findFirst: jest.fn().mockResolvedValue({
+            id: "intent_1",
+            proofId: "proof_1",
+            operation: "REGISTER",
+            status: "QUARANTINED",
+            quarantineDecision: "PENDING",
+          }),
+        },
+        $transaction: jest.fn().mockImplementation(async (fn: (tx: unknown) => unknown) =>
+          fn({
+            anchoringIntent: {
+              update: jest.fn().mockResolvedValue({
+                id: "intent_1",
+                status: "QUARANTINED",
+                quarantineDecision: "ABANDONED",
+              }),
+            },
+            auditLog: { create: jest.fn().mockResolvedValue({}) },
+            proof: { update: proofUpdate },
+          }),
+        ),
+      };
+      const service = new ProofsService(
+        prisma as never,
+        config as never,
+        mockVerificationEventService,
+      );
+
+      await service.abandonProofAnchoring(user, "proof_1", "intent_1");
+
+      expect(proofUpdate).not.toHaveBeenCalled();
+    });
+
+    it("is idempotent: abandoning an already-abandoned intent returns the existing decision without writing again", async () => {
+      const prisma = {
+        proof: { findFirst: jest.fn().mockResolvedValue({ id: "proof_1" }) },
+        anchoringIntent: {
+          findFirst: jest.fn().mockResolvedValue({
+            id: "intent_1",
+            proofId: "proof_1",
+            status: "QUARANTINED",
+            quarantineDecision: "ABANDONED",
+          }),
+        },
+        $transaction: jest.fn(),
+      };
+      const service = new ProofsService(
+        prisma as never,
+        config as never,
+        mockVerificationEventService,
+      );
+
+      const result = await service.abandonProofAnchoring(user, "proof_1", "intent_1");
+
+      expect(result).toEqual({
+        intentId: "intent_1",
+        status: "QUARANTINED",
+        quarantineDecision: "ABANDONED",
+      });
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
+
+    it("refuses to abandon an intent that is not quarantined", async () => {
+      const prisma = {
+        proof: { findFirst: jest.fn().mockResolvedValue({ id: "proof_1" }) },
+        anchoringIntent: {
+          findFirst: jest.fn().mockResolvedValue({
+            id: "intent_1",
+            proofId: "proof_1",
+            status: "PENDING",
+            quarantineDecision: "PENDING",
+          }),
+        },
+        $transaction: jest.fn(),
+      };
+      const service = new ProofsService(
+        prisma as never,
+        config as never,
+        mockVerificationEventService,
+      );
+
+      await expect(
+        service.abandonProofAnchoring(user, "proof_1", "intent_1"),
+      ).rejects.toThrow(/not eligible for abandonment/);
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
+
+    it("refuses to abandon a proof the caller does not own and is not an administrator for", async () => {
+      const prisma = {
+        proof: { findFirst: jest.fn().mockResolvedValue(null) },
+        anchoringIntent: { findFirst: jest.fn() },
+        $transaction: jest.fn(),
+      };
+      const service = new ProofsService(
+        prisma as never,
+        config as never,
+        mockVerificationEventService,
+      );
+
+      await expect(
+        service.abandonProofAnchoring(user, "someone_elses_proof", "intent_1"),
+      ).rejects.toThrow("Proof not found");
+      expect(prisma.anchoringIntent.findFirst).not.toHaveBeenCalled();
+    });
+
+    it("fails the whole abandonment when the audit write fails", async () => {
+      const prisma = {
+        proof: { findFirst: jest.fn().mockResolvedValue({ id: "proof_1" }) },
+        anchoringIntent: {
+          findFirst: jest.fn().mockResolvedValue({
+            id: "intent_1",
+            proofId: "proof_1",
+            status: "QUARANTINED",
+            quarantineDecision: "PENDING",
+          }),
+        },
+        $transaction: jest.fn().mockImplementation(async (fn: (tx: unknown) => unknown) =>
+          fn({
+            anchoringIntent: {
+              update: jest.fn().mockResolvedValue({
+                id: "intent_1",
+                status: "QUARANTINED",
+                quarantineDecision: "ABANDONED",
+              }),
+            },
+            auditLog: {
+              create: jest.fn().mockRejectedValue(new Error("audit store unavailable")),
+            },
+          }),
+        ),
+      };
+      const service = new ProofsService(
+        prisma as never,
+        config as never,
+        mockVerificationEventService,
+      );
+
+      await expect(
+        service.abandonProofAnchoring(user, "proof_1", "intent_1"),
       ).rejects.toThrow("audit store unavailable");
     });
   });

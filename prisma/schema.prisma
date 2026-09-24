@@ -101,6 +101,36 @@ enum AnchoringStatus {
   PROCESSING
   CONFIRMED
   FAILED
+  /// Terminal for automatic retries: the worker stops touching this intent.
+  /// Only a redrive (back to PENDING) or an explicit abandonment moves it
+  /// out of this state.
+  QUARANTINED
+}
+
+/// Why an anchoring intent was quarantined. Distinct from the free-form
+/// `lastErrorSafe` text so operators and dashboards can group without
+/// parsing prose, and so the value is guaranteed already-redacted.
+enum QuarantineReasonCode {
+  /// The input itself cannot succeed no matter how many times it is retried
+  /// (e.g. malformed commitment, invalid contract id).
+  POISON_INPUT
+  /// The chain explicitly rejected the operation (e.g. already registered,
+  /// unauthorized, contract not found).
+  CHAIN_REJECTED
+  /// Exhausted the worker's automatic retry budget without a permanent
+  /// chain-level rejection.
+  MAX_ATTEMPTS_EXCEEDED
+  /// Flagged by the reconciler for a state disagreement it cannot repair
+  /// automatically.
+  MANUAL_REVIEW
+}
+
+/// An operator's disposition of a quarantined intent. PENDING means no
+/// decision has been made yet.
+enum QuarantineDecision {
+  PENDING
+  REDRIVEN
+  ABANDONED
 }
 
 enum AuthEventType {
@@ -116,31 +146,31 @@ enum ApiKeyScope {
   // Proof verification and reading
   PROOF_READ
   PROOF_VERIFY
-  
+
   // Payment management and reading
   PAYMENT_READ
   PAYMENT_WRITE
-  
+
   // Organization management
   ORG_READ
   ORG_ADMIN
 }
 
 model User {
-  id                 String          @id @default(cuid())
-  walletAddress      String          @unique
-  walletHash         String          @unique
-  role               UserRole        @default(WORKER)
-  status             ResourceStatus  @default(ACTIVE)
-  createdAt          DateTime        @default(now())
-  updatedAt          DateTime        @updatedAt
-  lastLoginAt        DateTime?
-  organizations      Organization[]
-  payments           Payment[]
-  trustedSources     TrustedSource[]
-  proofs             Proof[]
-  createdApiKeys     ApiKey[]
-  sessions           AuthSession[]
+  id             String          @id @default(cuid())
+  walletAddress  String          @unique
+  walletHash     String          @unique
+  role           UserRole        @default(WORKER)
+  status         ResourceStatus  @default(ACTIVE)
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+  lastLoginAt    DateTime?
+  organizations  Organization[]
+  payments       Payment[]
+  trustedSources TrustedSource[]
+  proofs         Proof[]
+  createdApiKeys ApiKey[]
+  sessions       AuthSession[]
 
   @@index([walletHash])
   @@index([status])
@@ -163,18 +193,18 @@ model WalletChallenge {
 /// Only a SHA-256 hash of the opaque bearer token is stored — the raw token is never
 /// written to the database or to any application log.
 model AuthSession {
-  id          String    @id @default(cuid())
+  id          String       @id @default(cuid())
   /// SHA-256 hex digest of the raw opaque session token.
-  tokenHash   String    @unique
+  tokenHash   String       @unique
   userId      String
-  user        User      @relation(fields: [userId], references: [id])
-  createdAt   DateTime  @default(now())
+  user        User         @relation(fields: [userId], references: [id])
+  createdAt   DateTime     @default(now())
   expiresAt   DateTime
   lastUsedAt  DateTime?
   /// Set when the session is explicitly revoked (logout or rotation).
   revokedAt   DateTime?
   /// Links to the replacement session produced during rotation.
-  rotatedToId String?   @unique
+  rotatedToId String?      @unique
   rotatedTo   AuthSession? @relation("SessionRotation", fields: [rotatedToId], references: [id])
   rotatedFrom AuthSession? @relation("SessionRotation")
 
@@ -184,15 +214,15 @@ model AuthSession {
 }
 
 model Organization {
-  id          String          @id @default(cuid())
+  id          String         @id @default(cuid())
   name        String
-  slug        String          @unique
+  slug        String         @unique
   website     String?
-  status      ResourceStatus  @default(PENDING)
+  status      ResourceStatus @default(PENDING)
   createdById String
-  createdBy   User            @relation(fields: [createdById], references: [id])
-  createdAt   DateTime        @default(now())
-  updatedAt   DateTime        @updatedAt
+  createdBy   User           @relation(fields: [createdById], references: [id])
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
   issuers     Issuer[]
   apiKeys     ApiKey[]
   webhooks    Webhook[]
@@ -201,49 +231,49 @@ model Organization {
 }
 
 model Issuer {
-  id              String          @id @default(cuid())
-  organizationId  String
-  organization    Organization    @relation(fields: [organizationId], references: [id])
-  stellarAddress  String          @unique
-  status          ResourceStatus  @default(PENDING)
-  metadataHash    String?
-  publicMetadata  Json?
+  id                      String          @id @default(cuid())
+  organizationId          String
+  organization            Organization    @relation(fields: [organizationId], references: [id])
+  stellarAddress          String          @unique
+  status                  ResourceStatus  @default(PENDING)
+  metadataHash            String?
+  publicMetadata          Json?
   contractSyncState       String          @default("PENDING")
   contractSyncedStatus    ResourceStatus?
   contractTransactionHash String?
-  contractSyncedAt         DateTime?
-  contractSyncError        String?
-  verifiedAt      DateTime?
-  suspendedAt     DateTime?
-  revokedAt       DateTime?
-  createdAt       DateTime        @default(now())
-  updatedAt       DateTime        @updatedAt
-  trustedSources  TrustedSource[]
-  attestations    Attestation[]
+  contractSyncedAt        DateTime?
+  contractSyncError       String?
+  verifiedAt              DateTime?
+  suspendedAt             DateTime?
+  revokedAt               DateTime?
+  createdAt               DateTime        @default(now())
+  updatedAt               DateTime        @updatedAt
+  trustedSources          TrustedSource[]
+  attestations            Attestation[]
 
   @@index([organizationId])
   @@index([status])
 }
 
 model SupportedAsset {
-  id          String          @id @default(cuid())
-  assetKey    String          @unique
-  code        String
-  issuer      String?
-  network     String
-  status      ResourceStatus  @default(ACTIVE)
-  createdAt   DateTime        @default(now())
-  updatedAt   DateTime        @updatedAt
+  id        String         @id @default(cuid())
+  assetKey  String         @unique
+  code      String
+  issuer    String?
+  network   String
+  status    ResourceStatus @default(ACTIVE)
+  createdAt DateTime       @default(now())
+  updatedAt DateTime       @updatedAt
 
   @@index([network, status])
 }
 
 model Payment {
-  id                     String                 @id @default(cuid())
+  id                     String                @id @default(cuid())
   userId                 String
-  user                   User                   @relation(fields: [userId], references: [id])
+  user                   User                  @relation(fields: [userId], references: [id])
   stellarTransactionHash String
-  operationId            String                 @unique
+  operationId            String                @unique
   sourceAddress          String
   destinationAddress     String
   assetCode              String
@@ -251,10 +281,10 @@ model Payment {
   amountEncrypted        String?
   occurredAt             DateTime
   memo                   Json?
-  classification         PaymentClassification  @default(UNKNOWN)
-  isEligible             Boolean                @default(false)
-  createdAt              DateTime               @default(now())
-  updatedAt              DateTime               @updatedAt
+  classification         PaymentClassification @default(UNKNOWN)
+  isEligible             Boolean               @default(false)
+  createdAt              DateTime              @default(now())
+  updatedAt              DateTime              @updatedAt
 
   @@index([userId, occurredAt])
   @@index([sourceAddress])
@@ -263,29 +293,29 @@ model Payment {
 }
 
 model TrustedSource {
-  id            String          @id @default(cuid())
+  id            String         @id @default(cuid())
   userId        String
-  user          User            @relation(fields: [userId], references: [id])
+  user          User           @relation(fields: [userId], references: [id])
   sourceAddress String
   displayName   String?
   sourceType    String
   issuerId      String?
-  issuer        Issuer?         @relation(fields: [issuerId], references: [id])
-  status        ResourceStatus  @default(ACTIVE)
-  createdAt     DateTime        @default(now())
-  updatedAt     DateTime        @updatedAt
+  issuer        Issuer?        @relation(fields: [issuerId], references: [id])
+  status        ResourceStatus @default(ACTIVE)
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
 
   @@unique([userId, sourceAddress])
   @@index([issuerId])
 }
 
 model Proof {
-  id                      String              @id @default(cuid())
+  id                      String                @id @default(cuid())
   userId                  String
-  user                    User                @relation(fields: [userId], references: [id])
+  user                    User                  @relation(fields: [userId], references: [id])
   proofType               ProofType
   schemaVersion           String
-  status                  ProofStatus         @default(ACTIVE)
+  status                  ProofStatus           @default(ACTIVE)
   network                 String
   assetCode               String
   assetIssuer             String?
@@ -293,7 +323,7 @@ model Proof {
   periodEnd               DateTime?
   expiresAt               DateTime
   commitment              String?
-  credentialHash          String              @unique
+  credentialHash          String                @unique
   contractTransactionHash String?
   revokedAt               DateTime?
   /// Class of principal that revoked this proof. Null until revoked.
@@ -309,8 +339,8 @@ model Proof {
   /// Optional fixed-size (sha256) commitment to off-chain revocation
   /// evidence, in the same "sha256:<hex>" form as `commitment`.
   revocationEvidenceHash  String?
-  createdAt               DateTime            @default(now())
-  updatedAt               DateTime            @updatedAt
+  createdAt               DateTime              @default(now())
+  updatedAt               DateTime              @updatedAt
   claim                   ProofClaim?
   verificationEvents      VerificationEvent[]
   anchoringIntents        AnchoringIntent[]
@@ -322,15 +352,15 @@ model Proof {
 }
 
 model ProofClaim {
-  id                String   @id @default(cuid())
-  proofId           String   @unique
-  proof             Proof    @relation(fields: [proofId], references: [id])
-  operator          String
+  id                 String   @id @default(cuid())
+  proofId            String   @unique
+  proof              Proof    @relation(fields: [proofId], references: [id])
+  operator           String
   thresholdEncrypted String?
-  frequency         String?
-  result            Boolean
-  disclosurePolicy  Json
-  createdAt         DateTime @default(now())
+  frequency          String?
+  result             Boolean
+  disclosurePolicy   Json
+  createdAt          DateTime @default(now())
 }
 
 model Attestation {
@@ -380,21 +410,21 @@ model VerificationEventLog {
 }
 
 model ApiKey {
-  id             String          @id @default(cuid())
-  organizationId String
-  organization   Organization    @relation(fields: [organizationId], references: [id])
-  createdById    String
-  createdBy      User            @relation(fields: [createdById], references: [id])
-  name           String
-  prefix         String          @db.VarChar(8)
-  keyHash        String          @unique
+  id               String                  @id @default(cuid())
+  organizationId   String
+  organization     Organization            @relation(fields: [organizationId], references: [id])
+  createdById      String
+  createdBy        User                    @relation(fields: [createdById], references: [id])
+  name             String
+  prefix           String                  @db.VarChar(8)
+  keyHash          String                  @unique
   scopeAssignments ApiKeyScopeAssignment[] @relation("apiKeyScopeAssignments")
-  status         ResourceStatus  @default(ACTIVE)
-  lastUsedAt     DateTime?
-  rotatedAt      DateTime?
-  revokedAt      DateTime?
-  expiresAt      DateTime?
-  createdAt      DateTime        @default(now())
+  status           ResourceStatus          @default(ACTIVE)
+  lastUsedAt       DateTime?
+  rotatedAt        DateTime?
+  revokedAt        DateTime?
+  expiresAt        DateTime?
+  createdAt        DateTime                @default(now())
 
   @@index([organizationId, status])
   @@index([prefix])
@@ -410,16 +440,16 @@ model ApiKeyScopeAssignment {
 }
 
 model Webhook {
-  id               String            @id @default(cuid())
-  organizationId   String
-  organization     Organization      @relation(fields: [organizationId], references: [id])
-  url              String
-  secretEncrypted  String
-  events           Json
-  status           ResourceStatus    @default(ACTIVE)
-  createdAt        DateTime          @default(now())
-  updatedAt        DateTime          @updatedAt
-  deliveries       WebhookDelivery[]
+  id              String            @id @default(cuid())
+  organizationId  String
+  organization    Organization      @relation(fields: [organizationId], references: [id])
+  url             String
+  secretEncrypted String
+  events          Json
+  status          ResourceStatus    @default(ACTIVE)
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+  deliveries      WebhookDelivery[]
 
   @@index([organizationId, status])
 }
@@ -431,24 +461,24 @@ enum WebhookDeliveryStatus {
 }
 
 model WebhookDelivery {
-  id             String                @id @default(cuid())
-  webhookId      String
-  webhook        Webhook               @relation(fields: [webhookId], references: [id])
-  eventType      String
-  eventId        String
-  payload        Json
-  attempt        Int                   @default(1)
-  status         WebhookDeliveryStatus @default(PENDING)
-  statusCode     Int?
-  responseBody   String?
-  durationMs     Int?
-  failureReason  String?
-  replayOf       String?
-  replayedBy     String?
-  replayKey      String?               @unique
-  deliveredAt    DateTime?
-  nextRetryAt    DateTime?
-  createdAt      DateTime              @default(now())
+  id            String                @id @default(cuid())
+  webhookId     String
+  webhook       Webhook               @relation(fields: [webhookId], references: [id])
+  eventType     String
+  eventId       String
+  payload       Json
+  attempt       Int                   @default(1)
+  status        WebhookDeliveryStatus @default(PENDING)
+  statusCode    Int?
+  responseBody  String?
+  durationMs    Int?
+  failureReason String?
+  replayOf      String?
+  replayedBy    String?
+  replayKey     String?               @unique
+  deliveredAt   DateTime?
+  nextRetryAt   DateTime?
+  createdAt     DateTime              @default(now())
 
   @@index([webhookId, createdAt])
   @@index([eventId])
@@ -471,24 +501,36 @@ model AuditLog {
 }
 
 model AnchoringIntent {
-  id              String             @id @default(cuid())
-  proofId         String
-  proof           Proof              @relation(fields: [proofId], references: [id])
-  operation       AnchoringOperation
-  status          AnchoringStatus    @default(PENDING)
-  attemptCount    Int                @default(0)
-  lastAttemptAt   DateTime?
-  nextRetryAt     DateTime?
-  transactionHash String?
-  ledger          String?
-  lastErrorSafe   String?
-  permanentError  Boolean            @default(false)
-  createdAt       DateTime           @default(now())
-  updatedAt       DateTime           @updatedAt
+  id                   String                @id @default(cuid())
+  proofId              String
+  proof                Proof                 @relation(fields: [proofId], references: [id])
+  operation            AnchoringOperation
+  status               AnchoringStatus       @default(PENDING)
+  attemptCount         Int                   @default(0)
+  lastAttemptAt        DateTime?
+  nextRetryAt          DateTime?
+  transactionHash      String?
+  ledger               String?
+  lastErrorSafe        String?
+  permanentError       Boolean               @default(false)
+  /// Set when status transitions to QUARANTINED. Null otherwise.
+  quarantinedAt        DateTime?
+  quarantineReasonCode QuarantineReasonCode?
+  /// The operator's disposition. Only meaningful once quarantined; defaults
+  /// to PENDING so a freshly-quarantined intent always has a decision value
+  /// to query on.
+  quarantineDecision   QuarantineDecision    @default(PENDING)
+  /// Opaque id of the operator (a user id) who redrove or abandoned this
+  /// intent. Null until a decision is made.
+  decidedById          String?
+  decidedAt            DateTime?
+  createdAt            DateTime              @default(now())
+  updatedAt            DateTime              @updatedAt
 
   @@unique([proofId, operation])
   @@index([nextRetryAt])
   @@index([proofId])
+  @@index([status, quarantineDecision])
 }
 
 model AuthAuditEvent {

@@ -39,7 +39,7 @@ async function seedIntent(
     data: {
       proofId,
       operation: overrides.operation ?? AnchoringOperation.REGISTER,
-      status: overrides.status ?? AnchoringStatus.FAILED,
+      status: overrides.status ?? AnchoringStatus.QUARANTINED,
       attemptCount: overrides.attemptCount ?? 10,
       permanentError: overrides.permanentError ?? true,
       lastErrorSafe: overrides.lastErrorSafe ?? "[REDACTED_ADDRESS]: insufficient balance",
@@ -66,7 +66,7 @@ describe("proof anchoring status", () => {
     expect(result.intents).toHaveLength(1);
     expect(result.intents[0]).toMatchObject({
       operation: AnchoringOperation.REGISTER,
-      status: AnchoringStatus.FAILED,
+      status: AnchoringStatus.QUARANTINED,
       permanentError: true,
     });
   });
@@ -94,7 +94,7 @@ describe("proof anchoring status", () => {
 });
 
 describe("proof anchoring retry", () => {
-  it("requeues a permanently-failed intent and records an audit row, committed together", async () => {
+  it("redrives a quarantined intent and records an audit row, committed together", async () => {
     const user = await seedUser(db.prisma, "anchoring-retry-owner");
     const proof = await seedProof(db.prisma, "anchoring-retry-proof", user.id);
     const intent = await seedIntent(proof.id);
@@ -125,7 +125,7 @@ describe("proof anchoring retry", () => {
     expect(audit?.actorId).toBe(user.id);
   });
 
-  it("refuses to retry an intent that is not permanently failed", async () => {
+  it("refuses to retry an intent that is not quarantined", async () => {
     const user = await seedUser(db.prisma, "anchoring-retry-pending-owner");
     const proof = await seedProof(db.prisma, "anchoring-retry-pending-proof", user.id);
     const intent = await seedIntent(proof.id, {
@@ -181,6 +181,6 @@ describe("proof anchoring retry", () => {
     const stored = await db.prisma.anchoringIntent.findUniqueOrThrow({
       where: { id: intent.id },
     });
-    expect(stored.status).toBe(AnchoringStatus.FAILED);
+    expect(stored.status).toBe(AnchoringStatus.QUARANTINED);
   });
 });

@@ -16,6 +16,7 @@ import {
   Prisma,
   ProofStatus,
   ProofType,
+  QuarantineDecision,
   RevocationActorType,
   RevocationReasonCode,
   VerificationResult,
@@ -1525,18 +1526,26 @@ export class ProofsService {
         lastErrorSafe: intent.lastErrorSafe,
         permanentError: intent.permanentError,
         transactionHash: intent.transactionHash,
+        quarantinedAt: intent.quarantinedAt?.toISOString() ?? null,
+        quarantineReasonCode: intent.quarantineReasonCode,
+        quarantineDecision: intent.quarantineDecision,
+        decidedAt: intent.decidedAt?.toISOString() ?? null,
       })),
     };
   }
 
   /**
-   * Requeue a permanently-failed anchoring intent for the worker to retry.
+   * Redrive a quarantined anchoring intent: requeue it for the worker to
+   * retry.
    *
    * Deliberately does not invoke the CLI synchronously: the worker's poll
    * loop already owns claiming (`FOR UPDATE SKIP LOCKED`) and backoff, so
-   * this only flips FAILED -> PENDING with nextRetryAt = now and lets that
-   * machinery pick it up. attemptCount is preserved (not reset), so
-   * MAX_ATTEMPTS and the backoff curve still apply to a retried intent.
+   * this only flips QUARANTINED -> PENDING with nextRetryAt = now and lets
+   * that machinery pick it up. attemptCount is preserved (not reset), so
+   * MAX_ATTEMPTS and the backoff curve still apply to a redriven intent.
+   * Recording `quarantineDecision: REDRIVEN` keeps the prior quarantine
+   * reason and timestamp on the row rather than clearing them, so the
+   * intent's prior-attempt and quarantine history survives the redrive.
    */
   async retryProofAnchoring(user: AuthenticatedUser, proofId: string, intentId: string) {
     const proof = await this.prisma.proof.findFirst({
@@ -1557,12 +1566,16 @@ export class ProofsService {
       throw new NotFoundException("Anchoring intent not found for this proof");
     }
 
-    // Processing or confirmed intents cannot be duplicated: only a terminal,
-    // permanently-failed intent is eligible for a manual retry. A PENDING
-    // intent is already going to retry on its own schedule.
-    if (intent.status !== AnchoringStatus.FAILED || !intent.permanentError) {
+    // Processing or confirmed intents cannot be duplicated: only a
+    // quarantined intent is eligible for a manual redrive. A PENDING intent
+    // is already going to retry on its own schedule, and an ABANDONED
+    // decision is meant to be terminal.
+    if (
+      intent.status !== AnchoringStatus.QUARANTINED ||
+      intent.quarantineDecision === QuarantineDecision.ABANDONED
+    ) {
       throw new UnprocessableEntityException(
-        `Anchoring intent ${intentId} is not eligible for retry (status: ${intent.status}, permanentError: ${intent.permanentError})`,
+        `Anchoring intent ${intentId} is not eligible for retry (status: ${intent.status}, quarantineDecision: ${intent.quarantineDecision})`,
       );
     }
 
@@ -1574,6 +1587,9 @@ export class ProofsService {
           status: AnchoringStatus.PENDING,
           permanentError: false,
           nextRetryAt: requeuedAt,
+          quarantineDecision: QuarantineDecision.REDRIVEN,
+          decidedById: user.id,
+          decidedAt: requeuedAt,
         },
         select: { id: true, status: true, attemptCount: true },
       });
@@ -1596,6 +1612,84 @@ export class ProofsService {
       intentId: updated.id,
       status: updated.status,
       attemptCount: updated.attemptCount,
+    };
+  }
+
+  /**
+   * Abandon a quarantined anchoring intent: a terminal operator decision
+   * that the worker will never retry and no further redrive is expected.
+   *
+   * Deliberately touches only the AnchoringIntent row. Abandoning a
+   * REGISTER intent must never be able to make an unanchored proof look
+   * confirmed: Proof.status and Proof.contractTransactionHash are untouched
+   * here, so a proof whose only REGISTER intent was abandoned stays exactly
+   * as unanchored as it was before the abandonment.
+   */
+  async abandonProofAnchoring(user: AuthenticatedUser, proofId: string, intentId: string) {
+    const proof = await this.prisma.proof.findFirst({
+      where:
+        user.role === "ADMIN" ? { id: proofId } : { id: proofId, userId: user.id },
+      select: { id: true },
+    });
+
+    if (!proof) {
+      throw new NotFoundException("Proof not found");
+    }
+
+    const intent = await this.prisma.anchoringIntent.findFirst({
+      where: { id: intentId, proofId: proof.id },
+    });
+
+    if (!intent) {
+      throw new NotFoundException("Anchoring intent not found for this proof");
+    }
+
+    if (intent.status !== AnchoringStatus.QUARANTINED) {
+      throw new UnprocessableEntityException(
+        `Anchoring intent ${intentId} is not eligible for abandonment (status: ${intent.status})`,
+      );
+    }
+
+    if (intent.quarantineDecision === QuarantineDecision.ABANDONED) {
+      // Idempotent: already abandoned, return the existing decision as-is
+      // rather than overwriting decidedById/decidedAt on a retry.
+      return {
+        intentId: intent.id,
+        status: intent.status,
+        quarantineDecision: intent.quarantineDecision,
+      };
+    }
+
+    const decidedAt = new Date();
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const result = await tx.anchoringIntent.update({
+        where: { id: intentId },
+        data: {
+          quarantineDecision: QuarantineDecision.ABANDONED,
+          decidedById: user.id,
+          decidedAt,
+        },
+        select: { id: true, status: true, quarantineDecision: true },
+      });
+
+      await tx.auditLog.create({
+        data: {
+          actorType: "user",
+          actorId: user.id,
+          action: "anchoring_intent.abandoned",
+          resourceType: "proof",
+          resourceId: proof.id,
+          metadata: { intentId, decidedAt: decidedAt.toISOString() },
+        },
+      });
+
+      return result;
+    });
+
+    return {
+      intentId: updated.id,
+      status: updated.status,
+      quarantineDecision: updated.quarantineDecision,
     };
   }
 }

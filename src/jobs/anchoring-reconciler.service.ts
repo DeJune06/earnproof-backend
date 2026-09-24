@@ -5,6 +5,8 @@ import {
   AnchoringOperation,
   AnchoringStatus,
   ProofStatus,
+  QuarantineDecision,
+  QuarantineReasonCode,
 } from "@prisma/client";
 import { PrismaService } from "../database/prisma.service";
 import { ContractAnchoringService } from "../proofs/contract-anchoring.service";
@@ -20,18 +22,18 @@ const RECONCILE_BATCH_SIZE = 20;
  * Runs every 5 minutes. For proofs that have a confirmed on-chain transaction,
  * it calls getProofStatus and repairs disagreements according to this policy:
  *
- * | Local status | On-chain state              | Action                          |
- * |--------------|-----------------------------|---------------------------------|
- * | ACTIVE       | valid=true, revoked=false   | OK — no action                  |
- * | ACTIVE       | revoked=true                | Auto-repair: mark local REVOKED |
- * | ACTIVE       | valid=false, revoked=false  | Flag manual: create FAILED      |
- * |              |                             | AnchoringIntent for review      |
- * | REVOKED      | revoked=true                | OK — no action                  |
- * | REVOKED      | revoked=false               | Auto-repair: re-enqueue REVOKE  |
+ * | Local status | On-chain state              | Action                             |
+ * |--------------|-----------------------------|------------------------------------|
+ * | ACTIVE       | valid=true, revoked=false   | OK — no action                     |
+ * | ACTIVE       | revoked=true                | Auto-repair: mark local REVOKED    |
+ * | ACTIVE       | valid=false, revoked=false  | Flag manual: create QUARANTINED    |
+ * |              |                             | AnchoringIntent for review         |
+ * | REVOKED      | revoked=true                | OK — no action                     |
+ * | REVOKED      | revoked=false               | Auto-repair: re-enqueue REVOKE     |
  *
  * Auto-repair cases are handled silently and logged at WARN.
- * Manual-attention cases are logged at ERROR and create a FAILED intent with
- * permanentError=true so operators can find them.
+ * Manual-attention cases are logged at ERROR and create a QUARANTINED intent
+ * (reason MANUAL_REVIEW) so operators can find and redrive or abandon it.
  *
  * Secret safety: only proof IDs appear in structured logs; no signing key or
  * CLI credentials are ever logged or stored.
@@ -133,12 +135,12 @@ export class AnchoringReconcilerService {
     proofId: string,
     reason: string,
   ): Promise<void> {
-    // Only create one FAILED manual-review intent per proof to avoid flooding.
+    // Only create one quarantined manual-review intent per proof to avoid flooding.
     const existing = await this.prisma.anchoringIntent.findFirst({
       where: {
         proofId,
         operation: AnchoringOperation.REGISTER,
-        status: AnchoringStatus.FAILED,
+        status: AnchoringStatus.QUARANTINED,
         permanentError: true,
         lastErrorSafe: reason,
       },
@@ -150,9 +152,12 @@ export class AnchoringReconcilerService {
       data: {
         proofId,
         operation: AnchoringOperation.REGISTER,
-        status: AnchoringStatus.FAILED,
+        status: AnchoringStatus.QUARANTINED,
         permanentError: true,
         lastErrorSafe: reason,
+        quarantinedAt: new Date(),
+        quarantineReasonCode: QuarantineReasonCode.MANUAL_REVIEW,
+        quarantineDecision: QuarantineDecision.PENDING,
       },
     });
   }

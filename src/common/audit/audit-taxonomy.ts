@@ -330,6 +330,24 @@ export const AUDIT_EVENTS: readonly AuditEventDefinition[] = [
     description:
       "An operator manually requeued a permanently-failed anchoring intent for retry.",
   },
+  {
+    type: "anchoring_intent.abandoned",
+    domain: "proof",
+    store: "audit_log",
+    match: {
+      store: "audit_log",
+      action: "anchoring_intent.abandoned",
+      resourceType: "proof",
+    },
+    actorTypes: ["user"],
+    outcomes: ["success"],
+    tenant: "resource_id",
+    writeFailure: "fail_closed",
+    requiredMetadata: ["intentId", "decidedAt"],
+    description:
+      "An operator made a terminal decision to abandon a quarantined anchoring intent; " +
+      "the worker will never retry it again.",
+  },
   // ------------------------------------------------------------- api key ---
   {
     type: "api_key.created",

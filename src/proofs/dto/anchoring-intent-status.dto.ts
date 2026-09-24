@@ -1,5 +1,10 @@
 import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
-import { AnchoringOperation, AnchoringStatus } from "@prisma/client";
+import {
+  AnchoringOperation,
+  AnchoringStatus,
+  QuarantineDecision,
+  QuarantineReasonCode,
+} from "@prisma/client";
 
 export class AnchoringIntentStatusDto {
   @ApiProperty({ example: "clx1abc2def3ghi4" })
@@ -8,7 +13,7 @@ export class AnchoringIntentStatusDto {
   @ApiProperty({ enum: AnchoringOperation, example: AnchoringOperation.REGISTER })
   operation!: AnchoringOperation;
 
-  @ApiProperty({ enum: AnchoringStatus, example: AnchoringStatus.FAILED })
+  @ApiProperty({ enum: AnchoringStatus, example: AnchoringStatus.QUARANTINED })
   status!: AnchoringStatus;
 
   @ApiProperty({
@@ -34,13 +39,39 @@ export class AnchoringIntentStatusDto {
 
   @ApiProperty({
     description:
-      "True once the worker has stopped retrying automatically (a permanent error or the attempt cap was reached). Only these intents are eligible for a manual retry.",
+      "True once the worker has stopped retrying automatically. Superseded by `status: QUARANTINED`; kept for backward compatibility.",
     example: true,
   })
   permanentError!: boolean;
 
   @ApiPropertyOptional({ nullable: true, description: "On-chain transaction hash once confirmed." })
   transactionHash!: string | null;
+
+  @ApiPropertyOptional({
+    nullable: true,
+    description: "ISO-8601 UTC timestamp the intent entered QUARANTINED, or null.",
+  })
+  quarantinedAt!: string | null;
+
+  @ApiPropertyOptional({
+    enum: QuarantineReasonCode,
+    nullable: true,
+    description: "Why the intent was quarantined, or null if never quarantined.",
+  })
+  quarantineReasonCode!: QuarantineReasonCode | null;
+
+  @ApiProperty({
+    enum: QuarantineDecision,
+    example: QuarantineDecision.PENDING,
+    description: "The operator's disposition. PENDING until redriven or abandoned.",
+  })
+  quarantineDecision!: QuarantineDecision;
+
+  @ApiPropertyOptional({
+    nullable: true,
+    description: "ISO-8601 UTC timestamp of the operator's redrive/abandon decision, or null.",
+  })
+  decidedAt!: string | null;
 }
 
 export class ProofAnchoringStatusResponseDto {

@@ -21,6 +21,7 @@ import { AuthenticatedUser } from "../auth/auth.types";
 import { CurrentUser } from "../common/decorators/current-user.decorator";
 import { ApiErrorDto } from "../common/dto/api-error.dto";
 import { AuthGuard } from "../common/guards/auth.guard";
+import { AbandonAnchoringResponseDto } from "./dto/abandon-anchoring-response.dto";
 import { ProofAnchoringStatusResponseDto } from "./dto/anchoring-intent-status.dto";
 import { CreateMinimumIncomeProofDto } from "./dto/create-minimum-income-proof.dto";
 import { CreatePaymentReceiptProofDto } from "./dto/create-payment-receipt-proof.dto";
@@ -301,13 +302,13 @@ export class ProofsController {
   }
 
   @ApiOperation({
-    summary: "Retry a permanently-failed anchoring intent",
+    summary: "Redrive a quarantined anchoring intent",
     description:
-      "Requeues a FAILED, permanently-errored anchoring intent for the worker to retry on " +
-      "its next poll cycle. Does not invoke the chain synchronously. Only a permanently-" +
-      "failed intent is eligible; a PENDING intent is already scheduled to retry itself, and " +
-      "a PROCESSING or CONFIRMED intent cannot be retried. Available to the proof's owner or " +
-      "an administrator.",
+      "Requeues a QUARANTINED anchoring intent for the worker to retry on its next poll " +
+      "cycle. Does not invoke the chain synchronously. Only a quarantined intent without a " +
+      "prior ABANDONED decision is eligible; a PENDING intent is already scheduled to retry " +
+      "itself, and a PROCESSING or CONFIRMED intent cannot be retried. Available to the " +
+      "proof's owner or an administrator.",
   })
   @ApiBearerAuth()
   @ApiParam({
@@ -334,7 +335,7 @@ export class ProofsController {
   })
   @ApiResponse({
     status: HttpStatus.UNPROCESSABLE_ENTITY,
-    description: "The intent is not eligible for retry (not permanently failed).",
+    description: "The intent is not eligible for retry (not quarantined, or already abandoned).",
     type: ApiErrorDto,
   })
   @ApiResponse({
@@ -350,6 +351,58 @@ export class ProofsController {
     @Param("intentId") intentId: string,
   ) {
     return this.proofsService.retryProofAnchoring(user, id, intentId);
+  }
+
+  @ApiOperation({
+    summary: "Abandon a quarantined anchoring intent",
+    description:
+      "Records a terminal operator decision that a quarantined anchoring intent will never " +
+      "be retried again. Only touches the anchoring intent, never the proof's own status or " +
+      "on-chain transaction hash: abandoning a REGISTER intent cannot make an unanchored " +
+      "proof look confirmed. Idempotent: abandoning an already-abandoned intent returns its " +
+      "existing decision unchanged. Available to the proof's owner or an administrator.",
+  })
+  @ApiBearerAuth()
+  @ApiParam({
+    name: "id",
+    description: "Proof ID (uuid).",
+    example: "018e1234-abcd-7000-8000-abcdef012345",
+  })
+  @ApiParam({
+    name: "intentId",
+    description: "Anchoring intent ID.",
+    example: "clx1abc2def3ghi4",
+  })
+  @ApiResponse({
+    status: HttpStatus.OK,
+    description: "The intent was abandoned.",
+    type: AbandonAnchoringResponseDto,
+  })
+  @ApiResponse({
+    status: HttpStatus.NOT_FOUND,
+    description:
+      "Proof not found, does not belong to the authenticated user, or the intent does not " +
+      "belong to this proof.",
+    type: ApiErrorDto,
+  })
+  @ApiResponse({
+    status: HttpStatus.UNPROCESSABLE_ENTITY,
+    description: "The intent is not eligible for abandonment (not quarantined).",
+    type: ApiErrorDto,
+  })
+  @ApiResponse({
+    status: HttpStatus.UNAUTHORIZED,
+    description: "Bearer token is missing, malformed, invalid, or expired.",
+    type: ApiErrorDto,
+  })
+  @UseGuards(AuthGuard)
+  @Post(":id/anchoring/:intentId/abandon")
+  abandonProofAnchoring(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param("id") id: string,
+    @Param("intentId") intentId: string,
+  ) {
+    return this.proofsService.abandonProofAnchoring(user, id, intentId);
   }
 
   @ApiOperation({

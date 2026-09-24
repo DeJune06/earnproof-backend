@@ -5,7 +5,12 @@ import {
 } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { Interval } from "@nestjs/schedule";
-import { AnchoringOperation, AnchoringStatus } from "@prisma/client";
+import {
+  AnchoringOperation,
+  AnchoringStatus,
+  QuarantineDecision,
+  QuarantineReasonCode,
+} from "@prisma/client";
 import { PrismaService } from "../database/prisma.service";
 import { redactError } from "../common/observability/redaction";
 import {
@@ -51,17 +56,31 @@ const BATCH_SIZE = 5;
 const STALE_PROCESSING_THRESHOLD_MS = 5 * 60_000;
 
 /**
- * Error message substrings that indicate a permanent failure.
- * These are matched case-insensitively against the sanitised error text.
+ * Error message substrings indicating the *input itself* can never succeed,
+ * no matter how many times it is retried (a malformed or unresolvable
+ * request), as opposed to the chain refusing an otherwise well-formed one.
+ * Matched case-insensitively against the sanitised error text.
  */
-const PERMANENT_ERROR_PATTERNS: RegExp[] = [
-  /already registered/i,
-  /already exists/i,
+const POISON_INPUT_PATTERNS: RegExp[] = [
   /proof not found/i,
   /invalid contract id/i,
   /contract not found/i,
+];
+
+/**
+ * Error message substrings indicating the chain explicitly rejected an
+ * otherwise well-formed request. Matched case-insensitively.
+ */
+const CHAIN_REJECTED_PATTERNS: RegExp[] = [
+  /already registered/i,
+  /already exists/i,
   /unauthorized/i,
   /access denied/i,
+];
+
+const PERMANENT_ERROR_PATTERNS: RegExp[] = [
+  ...POISON_INPUT_PATTERNS,
+  ...CHAIN_REJECTED_PATTERNS,
 ];
 
 /**
@@ -70,6 +89,10 @@ const PERMANENT_ERROR_PATTERNS: RegExp[] = [
  */
 function isPermanentError(message: string): boolean {
   return PERMANENT_ERROR_PATTERNS.some((pattern) => pattern.test(message));
+}
+
+function isPoisonInput(message: string): boolean {
+  return POISON_INPUT_PATTERNS.some((pattern) => pattern.test(message));
 }
 
 function computeNextRetryAt(attemptCount: number): Date {
@@ -202,9 +225,12 @@ export class AnchoringWorkerService implements OnApplicationShutdown {
 
     if (
       intent.status === AnchoringStatus.CONFIRMED ||
-      intent.status === AnchoringStatus.FAILED
+      intent.status === AnchoringStatus.FAILED ||
+      intent.status === AnchoringStatus.QUARANTINED
     ) {
-      // Already terminal — nothing to do. Handles duplicate delivery.
+      // Already terminal — nothing to do. Handles duplicate delivery. A
+      // QUARANTINED intent only leaves this state through an operator's
+      // explicit redrive (ProofsService.retryProofAnchoring), never here.
       return;
     }
 
@@ -418,27 +444,45 @@ export class AnchoringWorkerService implements OnApplicationShutdown {
     } catch (err: unknown) {
       const message =
         err instanceof Error ? err.message : "Unknown error";
-      const permanent =
-        (err instanceof Error && (err as Error & { permanent?: boolean }).permanent) ||
-        isPermanentError(message) ||
-        newAttemptCount >= MAX_ATTEMPTS;
+      const explicitlyPermanent =
+        err instanceof Error && (err as Error & { permanent?: boolean }).permanent;
+      const poisonInput = isPoisonInput(message);
+      const chainRejected =
+        !poisonInput && (explicitlyPermanent || isPermanentError(message));
+      const attemptsExhausted = newAttemptCount >= MAX_ATTEMPTS;
+      const permanent = poisonInput || chainRejected || attemptsExhausted;
 
       const safeError = redactError(err);
 
       if (permanent) {
+        // Quarantined, not just FAILED: the worker stops touching this
+        // intent entirely until an operator redrives or abandons it (see
+        // ProofsService.retryProofAnchoring / abandonProofAnchoring).
+        // Idempotent under concurrent workers because this UPDATE only ever
+        // reaches an intent this worker itself claimed to PROCESSING in
+        // processBatch's atomic FOR UPDATE SKIP LOCKED claim.
+        const quarantineReasonCode = poisonInput
+          ? QuarantineReasonCode.POISON_INPUT
+          : chainRejected
+            ? QuarantineReasonCode.CHAIN_REJECTED
+            : QuarantineReasonCode.MAX_ATTEMPTS_EXCEEDED;
+
         await this.prisma.anchoringIntent.update({
           where: { id },
           data: {
-            status: AnchoringStatus.FAILED,
+            status: AnchoringStatus.QUARANTINED,
             attemptCount: newAttemptCount,
             lastAttemptAt: new Date(),
             nextRetryAt: null,
             lastErrorSafe: safeError,
             permanentError: true,
+            quarantinedAt: new Date(),
+            quarantineReasonCode,
+            quarantineDecision: QuarantineDecision.PENDING,
           },
         });
         this.logger.error(
-          `Intent ${id} FAILED permanently: ${operation} for proof ${proofId} — ${safeError}`,
+          `Intent ${id} QUARANTINED (${quarantineReasonCode}): ${operation} for proof ${proofId} — ${safeError}`,
         );
       } else {
         const nextRetryAt = computeNextRetryAt(newAttemptCount);
