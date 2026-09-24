@@ -149,4 +149,11 @@ export const FIELD_LIMITS = {
   /** Free-form metadata objects, by serialised size and nesting depth. */
   metadataBytes: 8 * KB,
   metadataDepth: 5,
+  /**
+   * A private, free-form revocation reason.
+   *
+   * Long enough for an operator note, short enough that it cannot be used to
+   * smuggle an unbounded document into an audit-log row.
+   */
+  revocationReason: 500,
 } as const;

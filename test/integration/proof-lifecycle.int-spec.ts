@@ -190,14 +190,17 @@ describe("proof revocation", () => {
       periodEnd: PERIOD_END,
     });
 
-    const revoked = await proofs().revokeProof(user.id, created.proofId);
+    const revoked = await proofs().revokeProof(authenticated, created.proofId);
     expect(revoked.status).toBe(ProofStatus.REVOKED);
+    expect(revoked.revokedByType).toBe("OWNER");
+    expect(revoked.revocationReasonCode).toBe("OWNER_REQUESTED");
 
     const stored = await db.prisma.proof.findUniqueOrThrow({
       where: { id: created.proofId },
     });
     expect(stored.status).toBe(ProofStatus.REVOKED);
     expect(stored.revokedAt).toBeInstanceOf(Date);
+    expect(stored.revokedById).toBe(user.id);
   });
 
   it("refuses to revoke a proof owned by someone else", async () => {
@@ -205,7 +208,7 @@ describe("proof revocation", () => {
     const stranger = await seedUser(db.prisma, "revoke-stranger");
     const proof = await seedProof(db.prisma, "revoke-target", owner.id);
 
-    await expect(proofs().revokeProof(stranger.id, proof.id)).rejects.toBeInstanceOf(
+    await expect(proofs().revokeProof(stranger, proof.id)).rejects.toBeInstanceOf(
       ForbiddenException,
     );
 
@@ -214,11 +217,28 @@ describe("proof revocation", () => {
     expect(stored.revokedAt).toBeNull();
   });
 
+  it("allows an administrator to revoke a proof they do not own", async () => {
+    const owner = await seedUser(db.prisma, "revoke-admin-owner");
+    const admin = await seedUser(db.prisma, "revoke-admin-actor", { role: "ADMIN" });
+    const proof = await seedProof(db.prisma, "revoke-admin-target", owner.id);
+
+    const revoked = await proofs().revokeProof(admin, proof.id, {
+      reasonCode: "COMPLIANCE_HOLD",
+    });
+
+    expect(revoked.status).toBe(ProofStatus.REVOKED);
+    expect(revoked.revokedByType).toBe("ADMIN");
+    expect(revoked.revocationReasonCode).toBe("COMPLIANCE_HOLD");
+
+    const stored = await db.prisma.proof.findUniqueOrThrow({ where: { id: proof.id } });
+    expect(stored.revokedById).toBe(admin.id);
+  });
+
   it("reports a missing proof rather than silently succeeding", async () => {
     const user = await seedUser(db.prisma, "revoke-missing");
 
     await expect(
-      proofs().revokeProof(user.id, "proof_that_was_never_created"),
+      proofs().revokeProof(user, "proof_that_was_never_created"),
     ).rejects.toBeInstanceOf(NotFoundException);
   });
 
@@ -226,12 +246,25 @@ describe("proof revocation", () => {
     const user = await seedUser(db.prisma, "revoke-twice");
     const proof = await seedProof(db.prisma, "revoke-twice-target", user.id);
 
-    const first = await proofs().revokeProof(user.id, proof.id);
-    const second = await proofs().revokeProof(user.id, proof.id);
+    const first = await proofs().revokeProof(user, proof.id, {
+      reasonCode: "DUPLICATE_PROOF",
+      reasonPrivate: "first call",
+    });
+    const second = await proofs().revokeProof(user, proof.id, {
+      reasonCode: "FRAUD_SUSPECTED",
+      reasonPrivate: "second call should not overwrite",
+    });
 
     expect(first.status).toBe(ProofStatus.REVOKED);
     expect(second.status).toBe(ProofStatus.REVOKED);
+    // The second call must not overwrite the original revocation metadata.
+    expect(second.revocationReasonCode).toBe("DUPLICATE_PROOF");
+    expect(second.revocationReasonPrivate).toBe("first call");
     expect(await db.prisma.proof.count()).toBe(1);
+
+    const stored = await db.prisma.proof.findUniqueOrThrow({ where: { id: proof.id } });
+    expect(stored.revocationReasonCode).toBe("DUPLICATE_PROOF");
+    expect(stored.revocationReasonPrivate).toBe("first call");
   });
 });
 

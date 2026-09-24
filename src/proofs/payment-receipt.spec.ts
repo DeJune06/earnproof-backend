@@ -92,6 +92,7 @@ describe("ProofsService payment-receipt proofs", () => {
       },
       verificationEvent: { create: jest.fn().mockResolvedValue({}) },
       anchoringIntent: { create: jest.fn().mockResolvedValue({}) },
+      auditLog: { create: jest.fn().mockResolvedValue({}) },
     };
     prisma.$transaction = jest.fn(async (callback) => callback(prisma));
     const harnessConfig = {
@@ -299,7 +300,7 @@ describe("ProofsService payment-receipt proofs", () => {
 
     getStoredProof().contractTransactionHash = "anchor_tx";
 
-    const revoked = await service.revokeProof(user.id, created.proofId);
+    const revoked = await service.revokeProof(user, created.proofId);
     expect(revoked.status).toBe(ProofStatus.REVOKED);
     expect(contract.revokeProof).not.toHaveBeenCalled();
     expect(prisma.anchoringIntent.create).toHaveBeenCalledWith({

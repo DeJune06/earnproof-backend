@@ -251,7 +251,14 @@ describe("ProofsService", () => {
               id: "proof_anchored",
               status: ProofStatus.REVOKED,
               revokedAt: new Date("2026-08-04T00:00:00.000Z"),
+              revokedByType: "OWNER",
+              revocationReasonCode: "OWNER_REQUESTED",
+              revocationReasonPrivate: null,
+              revocationEvidenceHash: null,
             }),
+          },
+          auditLog: {
+            create: jest.fn().mockResolvedValue({}),
           },
           anchoringIntent: {
             create: jest.fn().mockImplementation(({ data }) => {
@@ -269,7 +276,7 @@ describe("ProofsService", () => {
       mockVerificationEventService,
     );
 
-    const result = await service.revokeProof("user_1", "proof_anchored");
+    const result = await service.revokeProof(user, "proof_anchored");
 
     expect(result.id).toBe("proof_anchored");
     expect(result.anchoring).toEqual({ anchored: false, reason: "pending" });
@@ -280,6 +287,208 @@ describe("ProofsService", () => {
       operation: AnchoringOperation.REVOKE,
       status: AnchoringStatus.PENDING,
     });
+  });
+
+  it("allows an administrator to revoke a proof owned by someone else", async () => {
+    const prisma = {
+      proof: {
+        findUnique: jest.fn().mockResolvedValue({
+          id: "proof_1",
+          userId: "user_1",
+          status: ProofStatus.ACTIVE,
+          contractTransactionHash: null,
+        }),
+      },
+      $transaction: jest.fn().mockImplementation(async (fn: (tx: unknown) => unknown) => {
+        const tx = {
+          proof: {
+            update: jest.fn().mockImplementation(({ data }) =>
+              Promise.resolve({
+                id: "proof_1",
+                status: ProofStatus.REVOKED,
+                revokedAt: new Date("2026-08-04T00:00:00.000Z"),
+                revokedByType: data.revokedByType,
+                revocationReasonCode: data.revocationReasonCode,
+                revocationReasonPrivate: data.revocationReasonPrivate,
+                revocationEvidenceHash: data.revocationEvidenceHash,
+              }),
+            ),
+          },
+          auditLog: { create: jest.fn().mockResolvedValue({}) },
+          anchoringIntent: { create: jest.fn() },
+        };
+        return fn(tx);
+      }),
+    };
+    const service = new ProofsService(
+      prisma as never,
+      config as never,
+      mockVerificationEventService,
+    );
+
+    const admin = { ...user, id: "admin_1", role: "ADMIN" };
+    const result = await service.revokeProof(admin, "proof_1", {
+      reasonCode: "COMPLIANCE_HOLD",
+    });
+
+    expect(result.status).toBe(ProofStatus.REVOKED);
+    expect(result.revokedByType).toBe("ADMIN");
+    expect(result.revocationReasonCode).toBe("COMPLIANCE_HOLD");
+  });
+
+  it("refuses a non-owner, non-administrator revocation attempt", async () => {
+    const prisma = {
+      proof: {
+        findUnique: jest.fn().mockResolvedValue({
+          id: "proof_1",
+          userId: "user_1",
+          status: ProofStatus.ACTIVE,
+          contractTransactionHash: null,
+        }),
+      },
+      $transaction: jest.fn(),
+    };
+    const service = new ProofsService(
+      prisma as never,
+      config as never,
+      mockVerificationEventService,
+    );
+
+    const stranger = { ...user, id: "user_2", role: "WORKER" };
+
+    await expect(service.revokeProof(stranger, "proof_1")).rejects.toThrow(
+      "Proof does not belong to this user",
+    );
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  it("throws NotFoundException for a proof that does not exist", async () => {
+    const prisma = {
+      proof: { findUnique: jest.fn().mockResolvedValue(null) },
+      $transaction: jest.fn(),
+    };
+    const service = new ProofsService(
+      prisma as never,
+      config as never,
+      mockVerificationEventService,
+    );
+
+    await expect(service.revokeProof(user, "missing_proof")).rejects.toThrow(
+      "Proof not found",
+    );
+  });
+
+  it("is idempotent: a second revocation returns the original metadata unchanged and does not open a new transaction", async () => {
+    const prisma = {
+      proof: {
+        findUnique: jest.fn().mockResolvedValue({
+          id: "proof_1",
+          userId: "user_1",
+          status: ProofStatus.REVOKED,
+          contractTransactionHash: null,
+          revokedAt: new Date("2026-08-01T00:00:00.000Z"),
+          revokedByType: "OWNER",
+          revocationReasonCode: "DUPLICATE_PROOF",
+          revocationReasonPrivate: "original note",
+          revocationEvidenceHash: null,
+        }),
+      },
+      $transaction: jest.fn(),
+    };
+    const service = new ProofsService(
+      prisma as never,
+      config as never,
+      mockVerificationEventService,
+    );
+
+    const result = await service.revokeProof(user, "proof_1", {
+      reasonCode: "FRAUD_SUSPECTED",
+      reasonPrivate: "an attempt to overwrite the original reason",
+    });
+
+    expect(result.revocationReasonCode).toBe("DUPLICATE_PROOF");
+    expect(result.revocationReasonPrivate).toBe("original note");
+    expect(result.revokedAt).toBe("2026-08-01T00:00:00.000Z");
+    // No write is attempted at all for an already-revoked proof.
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  it("does not enqueue a REVOKE intent when the proof was never anchored", async () => {
+    const capturedIntentCreate = jest.fn();
+    const prisma = {
+      proof: {
+        findUnique: jest.fn().mockResolvedValue({
+          id: "proof_1",
+          userId: "user_1",
+          status: ProofStatus.ACTIVE,
+          contractTransactionHash: null,
+        }),
+      },
+      $transaction: jest.fn().mockImplementation(async (fn: (tx: unknown) => unknown) =>
+        fn({
+          proof: {
+            update: jest.fn().mockResolvedValue({
+              id: "proof_1",
+              status: ProofStatus.REVOKED,
+              revokedAt: new Date("2026-08-04T00:00:00.000Z"),
+              revokedByType: "OWNER",
+              revocationReasonCode: "OWNER_REQUESTED",
+              revocationReasonPrivate: null,
+              revocationEvidenceHash: null,
+            }),
+          },
+          auditLog: { create: jest.fn().mockResolvedValue({}) },
+          anchoringIntent: { create: capturedIntentCreate },
+        }),
+      ),
+    };
+    const service = new ProofsService(
+      prisma as never,
+      makeConfig(true) as never, // anchoring enabled, but proof was never anchored
+      mockVerificationEventService,
+    );
+
+    const result = await service.revokeProof(user, "proof_1");
+
+    expect(result.anchoring).toEqual({ anchored: false, reason: "disabled" });
+    expect(capturedIntentCreate).not.toHaveBeenCalled();
+  });
+
+  it("fails the whole revocation when the audit write fails, leaving no partial state observable to the caller", async () => {
+    const prisma = {
+      proof: {
+        findUnique: jest.fn().mockResolvedValue({
+          id: "proof_1",
+          userId: "user_1",
+          status: ProofStatus.ACTIVE,
+          contractTransactionHash: null,
+        }),
+      },
+      $transaction: jest.fn().mockImplementation(async (fn: (tx: unknown) => unknown) =>
+        fn({
+          proof: {
+            update: jest.fn().mockResolvedValue({
+              id: "proof_1",
+              status: ProofStatus.REVOKED,
+              revokedAt: new Date("2026-08-04T00:00:00.000Z"),
+            }),
+          },
+          auditLog: {
+            create: jest.fn().mockRejectedValue(new Error("audit store unavailable")),
+          },
+          anchoringIntent: { create: jest.fn() },
+        }),
+      ),
+    };
+    const service = new ProofsService(
+      prisma as never,
+      config as never,
+      mockVerificationEventService,
+    );
+
+    await expect(service.revokeProof(user, "proof_1")).rejects.toThrow(
+      "audit store unavailable",
+    );
   });
 
   it("uses revoked on-chain status during public verification", async () => {

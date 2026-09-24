@@ -6,6 +6,7 @@ import { VerificationEventService } from "../../audit/verification-event.service
 import { IssuersService } from "../../issuers/issuers.service";
 import { OrganizationsService } from "../../organizations/organizations.service";
 import { PaymentsService } from "../../payments/payments.service";
+import { ProofsService } from "../../proofs/proofs.service";
 import { TrustedSourcesService } from "../../trusted-sources/trusted-sources.service";
 import { WebhooksService } from "../../webhooks/webhooks.service";
 import { findForbiddenAuditContent } from "./audit-redaction";
@@ -649,6 +650,62 @@ const scenarios: Scenario[] = [
         outcome,
       }),
   })),
+  {
+    event: "proof.revoked",
+    outcome: "success",
+    name: "revoking a proof",
+    run: (sink) => {
+      const prisma = {
+        proof: {
+          findUnique: jest.fn().mockResolvedValue({
+            id: "proof_1",
+            userId: USER_ID,
+            status: "ACTIVE",
+            contractTransactionHash: null,
+            revokedAt: null,
+            revokedByType: null,
+            revocationReasonCode: null,
+            revocationReasonPrivate: null,
+            revocationEvidenceHash: null,
+          }),
+        },
+        $transaction: jest.fn(async (callback: (tx: unknown) => unknown) =>
+          callback({
+            proof: {
+              update: jest.fn().mockResolvedValue({
+                id: "proof_1",
+                status: "REVOKED",
+                revokedAt: new Date("2026-02-01T00:00:00.000Z"),
+                revokedByType: "OWNER",
+                revocationReasonCode: "OWNER_REQUESTED",
+                revocationReasonPrivate: null,
+                revocationEvidenceHash: null,
+              }),
+            },
+            auditLog: sink.auditLog,
+            anchoringIntent: { create: jest.fn() },
+          }),
+        ),
+      };
+
+      return new ProofsService(
+        prisma as never,
+        configDouble({
+          credentialSigningSecret: "matrix-signing-secret",
+          "stellar.network": "testnet",
+        }),
+        { recordEvent: jest.fn() } as never,
+      ).revokeProof(
+        {
+          id: USER_ID,
+          walletAddress: "GTEST",
+          walletHash: `sha256:${"b".repeat(64)}`,
+          role: "WORKER",
+        },
+        "proof_1",
+      );
+    },
+  },
 ];
 
 /** The record a scenario produced, normalised across the three stores. */

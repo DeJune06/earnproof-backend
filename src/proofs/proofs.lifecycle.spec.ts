@@ -58,7 +58,7 @@ describe("ProofsService lifecycle", () => {
     expect(firstVerification.status).toBe("valid");
     expect(store.verificationEvents).toHaveLength(1);
 
-    await service.revokeProof(user.id, created.proofId);
+    await service.revokeProof(user, created.proofId);
 
     const secondVerification = await service.verifyProof(created.proofId);
     expect(secondVerification.result).toBe(VerificationResult.REVOKED);
@@ -256,6 +256,9 @@ function createProofStore() {
         anchoringIntent: {
           create: jest.fn().mockResolvedValue({ id: "intent_1" }),
         },
+        auditLog: {
+          create: jest.fn().mockResolvedValue({ id: "audit_1" }),
+        },
       };
       return fn(tx);
     }),
@@ -329,7 +332,7 @@ describe("ProofsService lifecycle – recurring-income", () => {
     expect(store.verificationEvents).toHaveLength(1);
 
     // ── 3. Revoke ────────────────────────────────────────────────────────────
-    const revoked = await service.revokeProof(user.id, created.proofId);
+    const revoked = await service.revokeProof(user, created.proofId);
     expect(revoked.status).toBe(ProofStatus.REVOKED);
 
     // ── 4. Re-verify (revoked) ───────────────────────────────────────────────
@@ -419,6 +422,7 @@ function createRecurringProofStore() {
             }),
           },
           anchoringIntent: { create: jest.fn() },
+          auditLog: { create: jest.fn().mockResolvedValue({ id: "audit_1" }) },
         }),
       ),
       payment: {

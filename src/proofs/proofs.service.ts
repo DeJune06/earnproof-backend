@@ -16,6 +16,8 @@ import {
   Prisma,
   ProofStatus,
   ProofType,
+  RevocationActorType,
+  RevocationReasonCode,
   VerificationResult,
   VerificationOutcome,
 } from "@prisma/client";
@@ -36,6 +38,7 @@ import {
   IntervalUnit,
 } from "./dto/create-recurring-income-proof.dto";
 import { ListProofsDto } from "./dto/list-proofs.dto";
+import { RevokeProofDto } from "./dto/revoke-proof.dto";
 
 const SCHEMA_VERSION = "earnproof.minimum-income.v1";
 const PAYMENT_RECEIPT_SCHEMA_VERSION = "earnproof.payment-receipt.v1";
@@ -690,7 +693,7 @@ export class ProofsService {
     };
   }
 
-  async revokeProof(userId: string, proofId: string) {
+  async revokeProof(user: AuthenticatedUser, proofId: string, body?: RevokeProofDto) {
     const proof = await this.prisma.proof.findUnique({
       where: {
         id: proofId,
@@ -700,6 +703,11 @@ export class ProofsService {
         userId: true,
         status: true,
         contractTransactionHash: true,
+        revokedAt: true,
+        revokedByType: true,
+        revocationReasonCode: true,
+        revocationReasonPrivate: true,
+        revocationEvidenceHash: true,
       },
     });
 
@@ -707,22 +715,71 @@ export class ProofsService {
       throw new NotFoundException("Proof not found");
     }
 
-    if (proof.userId !== userId) {
+    const isOwner = proof.userId === user.id;
+    const isAdmin = user.role === "ADMIN";
+
+    if (!isOwner && !isAdmin) {
       throw new ForbiddenException("Proof does not belong to this user");
     }
 
-    // Write local revocation + optional REVOKE anchoring intent atomically.
+    // Idempotent: a proof already revoked keeps its original actor, reason,
+    // and evidence. Re-issuing the same request must not let a second call
+    // (racing worker, retried client) overwrite that record.
+    if (proof.status === ProofStatus.REVOKED) {
+      return {
+        id: proof.id,
+        status: proof.status,
+        revokedAt: proof.revokedAt?.toISOString() ?? new Date().toISOString(),
+        revokedByType: proof.revokedByType ?? RevocationActorType.OWNER,
+        revocationReasonCode: proof.revocationReasonCode ?? RevocationReasonCode.OTHER,
+        revocationReasonPrivate: proof.revocationReasonPrivate ?? null,
+        revocationEvidenceHash: proof.revocationEvidenceHash ?? null,
+        anchoring: { anchored: false as const, reason: "disabled" as const },
+      };
+    }
+
+    const revokedByType = isAdmin && !isOwner ? RevocationActorType.ADMIN : RevocationActorType.OWNER;
+    const reasonCode = body?.reasonCode ?? RevocationReasonCode.OWNER_REQUESTED;
+    const revokedAt = new Date();
+
+    // Write local revocation, the audit record, and the optional REVOKE
+    // anchoring intent atomically: an untraceable revocation (state changed,
+    // no audit row) is worse than a failed one.
     const updated = await this.prisma.$transaction(async (tx) => {
       const result = await tx.proof.update({
         where: { id: proof.id },
         data: {
           status: ProofStatus.REVOKED,
-          revokedAt: new Date(),
+          revokedAt,
+          revokedByType,
+          revokedById: user.id,
+          revocationReasonCode: reasonCode,
+          revocationReasonPrivate: body?.reasonPrivate ?? null,
+          revocationEvidenceHash: body?.evidenceHash ?? null,
         },
         select: {
           id: true,
           status: true,
           revokedAt: true,
+          revokedByType: true,
+          revocationReasonCode: true,
+          revocationReasonPrivate: true,
+          revocationEvidenceHash: true,
+        },
+      });
+
+      await tx.auditLog.create({
+        data: {
+          actorType: "user",
+          actorId: user.id,
+          action: "proof.revoked",
+          resourceType: "proof",
+          resourceId: proof.id,
+          metadata: {
+            revokedByType,
+            reasonCode,
+            revokedAt: revokedAt.toISOString(),
+          },
         },
       });
 
@@ -746,14 +803,15 @@ export class ProofsService {
         ? { anchored: false as const, reason: "pending" as const }
         : { anchored: false as const, reason: "disabled" as const };
 
-    this.emitWebhook(userId, "proof.revoked", {
+    this.emitWebhook(proof.userId, "proof.revoked", {
       proofId: updated.id,
       status: updated.status,
-      revokedAt: updated.revokedAt?.toISOString() ?? new Date().toISOString(),
+      revokedAt: updated.revokedAt?.toISOString() ?? revokedAt.toISOString(),
     });
 
     return {
       ...updated,
+      revokedAt: updated.revokedAt?.toISOString() ?? revokedAt.toISOString(),
       anchoring: anchoringResult,
     };
   }
@@ -913,6 +971,7 @@ export class ProofsService {
         issuedAt: proof.createdAt.toISOString(),
         expiresAt: proof.expiresAt.toISOString(),
         revokedAt: proof.revokedAt?.toISOString() ?? null,
+        revocationReasonCode: proof.revocationReasonCode ?? null,
         contractStatus: contractStatus ?? {
           checked: false,
           reason: "disabled",
@@ -1356,6 +1415,10 @@ export class ProofsService {
       issuedAt: proof.createdAt.toISOString(),
       expiresAt: proof.expiresAt.toISOString(),
       revokedAt: proof.revokedAt?.toISOString() ?? null,
+      revokedByType: proof.revokedByType ?? null,
+      revocationReasonCode: proof.revocationReasonCode ?? null,
+      revocationReasonPrivate: proof.revocationReasonPrivate ?? null,
+      revocationEvidenceHash: proof.revocationEvidenceHash ?? null,
       anchoring: {
         anchored: Boolean(proof.contractTransactionHash),
         status: proof.contractTransactionHash ? "recorded" : "not_anchored",

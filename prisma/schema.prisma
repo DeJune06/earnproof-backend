@@ -77,6 +77,25 @@ enum AnchoringOperation {
   REVOKE
 }
 
+/// The class of principal that revoked a proof. Safe to expose publicly:
+/// it says who acted, never who they are.
+enum RevocationActorType {
+  OWNER
+  ADMIN
+}
+
+/// A closed, public-safe taxonomy for why a proof was revoked. Kept
+/// separate from any free-form private reason so the verification API can
+/// disclose *why* without disclosing operator notes.
+enum RevocationReasonCode {
+  OWNER_REQUESTED
+  DATA_CORRECTION
+  FRAUD_SUSPECTED
+  COMPLIANCE_HOLD
+  DUPLICATE_PROOF
+  OTHER
+}
+
 enum AnchoringStatus {
   PENDING
   PROCESSING
@@ -277,6 +296,19 @@ model Proof {
   credentialHash          String              @unique
   contractTransactionHash String?
   revokedAt               DateTime?
+  /// Class of principal that revoked this proof. Null until revoked.
+  revokedByType           RevocationActorType?
+  /// Opaque id of the revoking principal (a user id). Never a wallet
+  /// address or other directly-identifying value.
+  revokedById             String?
+  /// Closed, public-safe reason taxonomy. Null until revoked.
+  revocationReasonCode    RevocationReasonCode?
+  /// Free-form operator note. Private: never returned from the public
+  /// verification endpoint, only from the authorized owner/admin view.
+  revocationReasonPrivate String?
+  /// Optional fixed-size (sha256) commitment to off-chain revocation
+  /// evidence, in the same "sha256:<hex>" form as `commitment`.
+  revocationEvidenceHash  String?
   createdAt               DateTime            @default(now())
   updatedAt               DateTime            @updatedAt
   claim                   ProofClaim?

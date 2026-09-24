@@ -30,6 +30,7 @@ import {
   ProofDetailResponseDto,
   ProofListResponseDto,
 } from "./dto/proof-history-response.dto";
+import { RevokeProofDto } from "./dto/revoke-proof.dto";
 import { RevokeProofResponseDto } from "./dto/revoke-proof-response.dto";
 import { VerifyProofResponseDto } from "./dto/verify-proof-response.dto";
 import { VerificationStatsDto } from "./dto/verification-stats.dto";
@@ -218,9 +219,10 @@ export class ProofsController {
   @ApiOperation({
     summary: "Revoke a proof",
     description:
-      "Marks the proof as REVOKED and records a revocation timestamp. " +
+      "Marks the proof as REVOKED and records the revoking actor, reason, and revocation timestamp. " +
       "If the proof was anchored on-chain, a revocation transaction is also submitted. " +
-      "Only the owner of the proof may revoke it.",
+      "The owner of the proof or an administrator may revoke it. Idempotent: revoking an " +
+      "already-revoked proof returns its original revocation metadata unchanged.",
   })
   @ApiBearerAuth()
   @ApiParam({
@@ -240,7 +242,7 @@ export class ProofsController {
   })
   @ApiResponse({
     status: HttpStatus.FORBIDDEN,
-    description: "Proof does not belong to the authenticated user.",
+    description: "Proof does not belong to the authenticated user and they are not an administrator.",
     type: ApiErrorDto,
   })
   @ApiResponse({
@@ -250,8 +252,12 @@ export class ProofsController {
   })
   @UseGuards(AuthGuard)
   @Patch(":id/revoke")
-  revokeProof(@CurrentUser() user: AuthenticatedUser, @Param("id") id: string) {
-    return this.proofsService.revokeProof(user.id, id);
+  revokeProof(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param("id") id: string,
+    @Body() body?: RevokeProofDto,
+  ) {
+    return this.proofsService.revokeProof(user, id, body);
   }
 
   @ApiOperation({
