@@ -15,22 +15,16 @@ describe("ProofsService lifecycle", () => {
       getAggregateStats: jest.fn().mockResolvedValue({}),
       cleanupExpiredEvents: jest.fn().mockResolvedValue(0),
     } as unknown as VerificationEventService;
+    const configValues: Record<string, unknown> = {
+      credentialSigningSecret: "lifecycle-signing-secret",
+      paymentEncryptionKey: "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=",
+      "stellar.network": "testnet",
+      "contractAnchoring.enabled": false,
+      "contractAnchoring.required": false,
+    };
     const service = new ProofsService(store.prisma as never, {
-      getOrThrow: jest.fn((key: string) => {
-        const values: Record<string, string> = {
-          credentialSigningSecret: "lifecycle-signing-secret",
-          paymentEncryptionKey: "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=",
-          "stellar.network": "testnet",
-        };
-        return values[key];
-      }),
-      get: jest.fn((key: string) => {
-        const values: Record<string, boolean | undefined> = {
-          "contractAnchoring.enabled": false,
-          "contractAnchoring.required": false,
-        };
-        return values[key];
-      }),
+      getOrThrow: jest.fn((key: string) => configValues[key]),
+      get: jest.fn((key: string) => configValues[key]),
     } as never, mockVerificationEventService);
     const user = {
       id: "user_lifecycle",
@@ -129,19 +123,16 @@ const recurringRequest = {
 };
 
 function createRecurringService(store: ReturnType<typeof createRecurringProofStore>) {
+  const configValues: Record<string, unknown> = {
+    credentialSigningSecret: "lifecycle-signing-secret",
+    paymentEncryptionKey: "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=",
+    "stellar.network": "testnet",
+  };
   return new ProofsService(
     store.prisma as never,
     {
-      getOrThrow: jest.fn((key: string) => {
-        const values: Record<string, string> = {
-          credentialSigningSecret: "lifecycle-signing-secret",
-          paymentEncryptionKey:
-            "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=",
-          "stellar.network": "testnet",
-        };
-        return values[key];
-      }),
-      get: jest.fn(() => false),
+      getOrThrow: jest.fn((key: string) => configValues[key]),
+      get: jest.fn((key: string) => (key in configValues ? configValues[key] : false)),
     } as never,
     { recordEvent: jest.fn().mockResolvedValue(undefined) } as never,
   );
@@ -282,16 +273,14 @@ describe("ProofsService lifecycle – recurring-income", () => {
       getAggregateStats: jest.fn().mockResolvedValue({}),
       cleanupExpiredEvents: jest.fn().mockResolvedValue(0),
     } as unknown as VerificationEventService;
+    const riConfigValues: Record<string, unknown> = {
+      credentialSigningSecret: "lifecycle-signing-secret",
+      paymentEncryptionKey: "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=",
+      "stellar.network": "testnet",
+    };
     const service = new ProofsService(store.prisma as never, {
-      getOrThrow: jest.fn((key: string) => {
-        const values: Record<string, string> = {
-          credentialSigningSecret: "lifecycle-signing-secret",
-          paymentEncryptionKey: "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=",
-          "stellar.network": "testnet",
-        };
-        return values[key];
-      }),
-      get: jest.fn(() => false),
+      getOrThrow: jest.fn((key: string) => riConfigValues[key]),
+      get: jest.fn((key: string) => (key in riConfigValues ? riConfigValues[key] : false)),
     } as never, mockVerificationEventService);
     const user = {
       id: "user_ri_lifecycle",

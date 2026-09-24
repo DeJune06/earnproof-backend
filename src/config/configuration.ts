@@ -16,6 +16,41 @@ function loadPaymentEncryptionKeyVersions(): Record<number, string> {
   return versions;
 }
 
+/**
+ * Collects CREDENTIAL_SIGNING_SECRET_V0, _V1, ... into an indexed object,
+ * same loading convention as the payment-encryption keyring above.
+ */
+function loadCredentialSigningKeyVersions(): Record<number, string> {
+  const versions: Record<number, string> = {};
+  for (let i = 0; i < 100; i++) {
+    const value = process.env[`CREDENTIAL_SIGNING_SECRET_V${i}`];
+    if (value) {
+      versions[i] = value;
+    } else {
+      break;
+    }
+  }
+  return versions;
+}
+
+/**
+ * Collects CREDENTIAL_SIGNING_SECRET_V0_VERIFY_UNTIL, _V1_VERIFY_UNTIL, ...
+ * An operator sets this ISO-8601 timestamp on a key when demoting it from
+ * active to verify-only, marking the end of its overlap window. A version
+ * with no VERIFY_UNTIL set never expires on its own — an operator retires it
+ * by removing its secret entirely, same as the payment-encryption keyring.
+ */
+function loadCredentialSigningKeyVerifyUntil(): Record<number, string> {
+  const deadlines: Record<number, string> = {};
+  for (let i = 0; i < 100; i++) {
+    const value = process.env[`CREDENTIAL_SIGNING_SECRET_V${i}_VERIFY_UNTIL`];
+    if (value) {
+      deadlines[i] = value;
+    }
+  }
+  return deadlines;
+}
+
 export const configuration = () => ({
   nodeEnv: process.env.NODE_ENV ?? "development",
   port: Number(process.env.PORT ?? 4000),
@@ -33,6 +68,11 @@ export const configuration = () => ({
   },
   sessionSecret: process.env.SESSION_SECRET,
   credentialSigningSecret: process.env.CREDENTIAL_SIGNING_SECRET,
+  credentialSigningKeyVersions: loadCredentialSigningKeyVersions(),
+  credentialSigningKeyVersion: Number(
+    process.env.CREDENTIAL_SIGNING_KEY_VERSION ?? 0,
+  ),
+  credentialSigningKeyVerifyUntil: loadCredentialSigningKeyVerifyUntil(),
   paymentEncryptionKey: process.env.PAYMENT_ENCRYPTION_KEY,
   paymentEncryptionKeyVersions: loadPaymentEncryptionKeyVersions(),
   paymentEncryptionKeyVersion: Number(

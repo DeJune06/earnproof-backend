@@ -42,20 +42,17 @@ function sortObject(value: unknown): unknown {
  * @param anchoringRequired - CONTRACT_ANCHORING_REQUIRED
  */
 function makeConfig(anchoringEnabled = false, anchoringRequired = false) {
+  const values: Record<string, unknown> = {
+    credentialSigningSecret: "test-signing-secret",
+    paymentEncryptionKey: "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=",
+    "stellar.network": "testnet",
+    contractAnchoring: { enabled: anchoringEnabled, required: anchoringRequired },
+    "contractAnchoring.enabled": anchoringEnabled,
+    "contractAnchoring.required": anchoringRequired,
+  };
   return {
-    getOrThrow: jest.fn((key: string) => {
-      const values: Record<string, string> = {
-        credentialSigningSecret: "test-signing-secret",
-        paymentEncryptionKey: "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=",
-        "stellar.network": "testnet",
-      };
-      return values[key];
-    }),
-    get: jest.fn((key: string) => {
-      if (key === "contractAnchoring.enabled") return anchoringEnabled;
-      if (key === "contractAnchoring.required") return anchoringRequired;
-      return undefined;
-    }),
+    getOrThrow: jest.fn((key: string) => values[key]),
+    get: jest.fn((key: string) => values[key]),
   };
 }
 

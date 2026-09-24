@@ -26,6 +26,7 @@ import { createHmac, randomUUID } from "crypto";
 import { VerificationEventService } from "../audit/verification-event.service";
 import { AuthenticatedUser } from "../auth/auth.types";
 import { canonicalize } from "../common/crypto/canonicalize";
+import { CredentialSigningKeyringService } from "../common/crypto/credential-signing-keyring.service";
 import { sha256 } from "../common/crypto/hash";
 import { PaymentEncryptionKeyringService } from "../common/crypto/payment-encryption-keyring.service";
 import { ApiErrorCode } from "../common/dto/api-error.dto";
@@ -121,7 +122,7 @@ type EarnProofCredential =
 
 @Injectable()
 export class ProofsService {
-  private readonly signingSecret: string;
+  private readonly signingKeyring: CredentialSigningKeyringService;
   private readonly paymentEncryptionKeyring: PaymentEncryptionKeyringService;
   private readonly stellarNetwork: string;
   private readonly anchoringEnabled: boolean;
@@ -136,9 +137,7 @@ export class ProofsService {
     @Optional()
     private readonly webhookDeliveryService?: WebhookDeliveryService,
   ) {
-    this.signingSecret = configService.getOrThrow<string>(
-      "credentialSigningSecret",
-    );
+    this.signingKeyring = new CredentialSigningKeyringService(configService);
     this.paymentEncryptionKeyring = new PaymentEncryptionKeyringService(
       configService,
     );
@@ -1249,8 +1248,12 @@ export class ProofsService {
       ...credential,
       proof: {
         type: "HMAC-SHA256",
+        keyId: this.signingKeyring.activeKeyId,
         credentialHash: `sha256:${sha256(canonicalPayload)}`,
-        signature: `hmac-sha256:${createHmac("sha256", this.signingSecret)
+        signature: `hmac-sha256:${createHmac(
+          "sha256",
+          this.signingKeyring.activeSecret,
+        )
           .update(canonicalPayload)
           .digest("base64url")}`,
       },

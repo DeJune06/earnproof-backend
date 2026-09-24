@@ -37,16 +37,14 @@ describe("ProofsService payment-receipt proofs", () => {
     isEligible: true,
     occurredAt: new Date("2026-08-01T12:00:00.000Z"),
   };
+  const configValues: Record<string, unknown> = {
+    credentialSigningSecret: "test-signing-secret",
+    paymentEncryptionKey: "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=",
+    "stellar.network": "testnet",
+  };
   const config = {
-    get: jest.fn().mockReturnValue(false),
-    getOrThrow: jest.fn((key: string) => {
-      const values: Record<string, string> = {
-        credentialSigningSecret: "test-signing-secret",
-        paymentEncryptionKey: "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=",
-        "stellar.network": "testnet",
-      };
-      return values[key];
-    }),
+    get: jest.fn((key: string) => (key in configValues ? configValues[key] : false)),
+    getOrThrow: jest.fn((key: string) => configValues[key]),
   };
   const events = {
     recordEvent: jest.fn().mockResolvedValue(undefined),
@@ -98,7 +96,7 @@ describe("ProofsService payment-receipt proofs", () => {
     const harnessConfig = {
       ...config,
       get: jest.fn((key: string) =>
-        key === "contractAnchoring.enabled" ? Boolean(contract) : false,
+        key === "contractAnchoring.enabled" ? Boolean(contract) : config.get(key),
       ),
     };
     const service = new ProofsService(
