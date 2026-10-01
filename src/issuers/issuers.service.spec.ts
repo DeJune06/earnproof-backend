@@ -56,6 +56,7 @@ describe("IssuersService", () => {
     contractTransactionHash: null,
     contractSyncedAt: null,
     contractSyncError: null,
+    revision: 0,
     verifiedAt: null,
     suspendedAt: null,
     revokedAt: null,
@@ -79,6 +80,12 @@ describe("IssuersService", () => {
               findUnique: jest.fn(),
               findMany: jest.fn(),
               count: jest.fn(),
+            },
+            issuerAddressRotation: {
+              findUnique: jest.fn().mockResolvedValue(null),
+            },
+            issuerAddressHistory: {
+              findFirst: jest.fn().mockResolvedValue(null),
             },
             auditLog: {
               create: jest.fn(),
@@ -120,6 +127,27 @@ describe("IssuersService", () => {
       expect(result.id).toBe(mockIssuer.id);
       expect(result.status).toBe(ResourceStatus.PENDING);
       expect(prisma.issuer.create).toHaveBeenCalled();
+    });
+
+    it.each([
+      ["the target of an open address rotation", "issuerAddressRotation", "findUnique"],
+      ["an address an issuer used to hold", "issuerAddressHistory", "findFirst"],
+    ] as const)("should reject registering %s", async (_label, table, method) => {
+      jest
+        .spyOn(prisma.organization, "findUnique")
+        .mockResolvedValue(mockOrganization);
+      jest.spyOn(prisma.issuer, "findUnique").mockResolvedValue(null);
+      jest
+        .spyOn(prisma[table] as never, method as never)
+        .mockResolvedValue({ id: "reserved" } as never);
+
+      await expect(
+        service.createIssuer(mockUser, {
+          organizationId: "org-1",
+          stellarAddress: mockIssuer.stellarAddress,
+        }),
+      ).rejects.toThrow("reserved by an issuer address rotation");
+      expect(prisma.issuer.create).not.toHaveBeenCalled();
     });
 
     it("should reject when user is not admin", async () => {

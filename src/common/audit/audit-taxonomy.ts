@@ -323,6 +323,60 @@ export const AUDIT_EVENTS: readonly AuditEventDefinition[] = [
     requiredMetadata: ["state", "status"],
     description: "An issuer's status was synchronised with the on-chain registry.",
   },
+  {
+    type: "issuer.address_rotation_requested",
+    domain: "issuer",
+    store: "audit_log",
+    match: {
+      store: "audit_log",
+      action: "issuer.address_rotation.requested",
+      resourceType: "issuer_address_rotation",
+    },
+    actorTypes: ["user"],
+    outcomes: ["success"],
+    tenant: "metadata_organization_id",
+    writeFailure: "fail_closed",
+    requiredMetadata: ["organizationId", "issuerId", "fromAddress", "toAddress", "expectedRevision"],
+    publicIdentifierFields: ["fromAddress", "toAddress"],
+    description:
+      "An operator requested an issuer address rotation; the issuer's address is unchanged until the contract confirms it.",
+  },
+  {
+    type: "issuer.address_rotated",
+    domain: "issuer",
+    store: "audit_log",
+    match: {
+      store: "audit_log",
+      action: "issuer.address_rotation.confirmed",
+      resourceType: "issuer_address_rotation",
+    },
+    actorTypes: ["user", "system"],
+    outcomes: ["success"],
+    tenant: "metadata_organization_id",
+    writeFailure: "fail_closed",
+    requiredMetadata: ["organizationId", "issuerId", "fromAddress", "toAddress", "transactionHash"],
+    publicIdentifierFields: ["fromAddress", "toAddress"],
+    description:
+      "The contract was observed holding the new issuer address and the database adopted it; the previous address was moved to history.",
+  },
+  {
+    type: "issuer.address_rotation_failed",
+    domain: "issuer",
+    store: "audit_log",
+    match: {
+      store: "audit_log",
+      action: "issuer.address_rotation.failed",
+      resourceType: "issuer_address_rotation",
+    },
+    actorTypes: ["user", "system"],
+    outcomes: ["success"],
+    tenant: "metadata_organization_id",
+    writeFailure: "fail_closed",
+    requiredMetadata: ["organizationId", "issuerId", "reason"],
+    publicIdentifierFields: ["fromAddress", "toAddress"],
+    description:
+      "An issuer address rotation was closed without changing the issuer: a contract or database conflict, or retries exhausted.",
+  },
   // --------------------------------------------------------------- proof ---
   {
     type: "proof.verification_recorded",

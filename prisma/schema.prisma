@@ -75,6 +75,13 @@ enum VerificationOutcome {
   ISSUER_WARNING
 }
 
+/// Lifecycle of an issuer address rotation. The database adopts the new
+/// address only on CONFIRMED, after the contract is observed to hold it.
+enum IssuerAddressRotationStatus {
+  PENDING
+  SUBMITTED
+  CONFIRMED
+  FAILED
 enum PaymentSyncCheckpointStatus {
   VERIFIED
   DIVERGED
@@ -468,10 +475,16 @@ model Issuer {
   verifiedAt      DateTime?
   suspendedAt     DateTime?
   revokedAt       DateTime?
+  /// Optimistic-concurrency revision, incremented by every administrative
+  /// change. Address rotation requests must name the revision they were based
+  /// on, so a command built from a stale view of the issuer is rejected.
+  revision        Int             @default(0)
   createdAt       DateTime        @default(now())
   updatedAt       DateTime        @updatedAt
   trustedSources  TrustedSource[]
   attestations    Attestation[]
+  addressRotations IssuerAddressRotation[]
+  addressHistory   IssuerAddressHistory[]
   invoiceSettlements ProofInvoiceSettlement[]
   contractSyncedAt        DateTime?
   contractSyncError       String?
@@ -485,6 +498,55 @@ model Issuer {
 
   @@index([organizationId])
   @@index([status])
+}
+
+/// A requested change of an issuer's Stellar address, reconciled against the
+/// on-chain issuer registry before the database adopts it.
+model IssuerAddressRotation {
+  id               String                      @id @default(cuid())
+  issuerId         String
+  issuer           Issuer                      @relation(fields: [issuerId], references: [id])
+  fromAddress      String
+  toAddress        String
+  /// Issuer revision the request was based on.
+  expectedRevision Int
+  status           IssuerAddressRotationStatus @default(PENDING)
+  /// Set to the issuer id while the rotation is open, cleared when it closes:
+  /// the unique index allows at most one open rotation per issuer.
+  openIssuerKey    String?                     @unique
+  /// Set to the target address while the rotation is open: two issuers can
+  /// never be rotating onto the same address at once.
+  openTargetKey    String?                     @unique
+  requestedById    String
+  attemptCount     Int                         @default(0)
+  lastAttemptAt    DateTime?
+  nextAttemptAt    DateTime?
+  /// Lease held by the process currently reconciling this rotation.
+  leaseExpiresAt   DateTime?
+  transactionHash  String?
+  /// Bounded failure code; never raw CLI output.
+  lastError        String?
+  confirmedAt      DateTime?
+  createdAt        DateTime                    @default(now())
+  updatedAt        DateTime                    @updatedAt
+
+  @@index([issuerId, createdAt])
+  @@index([status, nextAttemptAt])
+}
+
+/// An address an issuer used to hold. Kept so attestations and on-chain
+/// events signed or registered under a retired address stay attributable.
+model IssuerAddressHistory {
+  id              String   @id @default(cuid())
+  issuerId        String
+  issuer          Issuer   @relation(fields: [issuerId], references: [id])
+  stellarAddress  String
+  retiredAt       DateTime
+  rotationId      String   @unique
+  transactionHash String?
+
+  @@index([issuerId, retiredAt])
+  @@index([stellarAddress])
 }
 
 model SupportedAsset {

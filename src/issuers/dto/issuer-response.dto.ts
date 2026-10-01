@@ -48,6 +48,12 @@ export class IssuerResponseDto {
   contractSyncedAt?: Date | null;
 
   @ApiPropertyOptional({
+    description:
+      "Optimistic-concurrency revision. Send it as expectedRevision when requesting an address rotation.",
+  })
+  revision?: number;
+
+  @ApiPropertyOptional({
     description: "ISO 8601 timestamp when issuer was verified/activated",
     nullable: true,
   })

@@ -46,6 +46,9 @@ and continues.
 | `issuer.metadata_updated` | issuer | `audit_log` | user | success | actor | fail_closed |
 | `issuer.status_updated` | issuer | `audit_log` | user | success | actor | fail_closed |
 | `issuer.status_synced` | issuer | `audit_log` | user | success | actor | fail_closed |
+| `issuer.address_rotation_requested` | issuer | `audit_log` | user | success | `metadata.organizationId` | fail_closed |
+| `issuer.address_rotated` | issuer | `audit_log` | user, system | success | `metadata.organizationId` | fail_closed |
+| `issuer.address_rotation_failed` | issuer | `audit_log` | user, system | success | `metadata.organizationId` | fail_closed |
 | `proof.verification_recorded` | proof | `verification_event_log` | system | success, denied | proof | fail_open |
 | `api_key.created` | api_key | `audit_log` | user | success | `metadata.organizationId` | fail_closed |
 | `api_key.rotated` | api_key | `audit_log` | user | success | `metadata.organizationId` | fail_closed |

@@ -140,9 +140,9 @@ Trusted attestation sources and their on-chain registry mirror.
 
 | | |
 |---|---|
-| **Public interface** | `/issuers` CRUD, status transitions, registry sync |
-| **Owned tables** | `Issuer`, `Attestation` |
-| **Key files** | [`issuers.service.ts`](../src/issuers/issuers.service.ts), [`issuer-registry.service.ts`](../src/issuers/issuer-registry.service.ts) |
+| **Public interface** | `/issuers` CRUD, status transitions, registry sync, ADMIN-only `/issuers/:id/address-rotations` |
+| **Owned tables** | `Issuer`, `Attestation`, `IssuerAddressRotation`, `IssuerAddressHistory` |
+| **Key files** | [`issuers.service.ts`](../src/issuers/issuers.service.ts), [`issuer-registry.service.ts`](../src/issuers/issuer-registry.service.ts), [`issuer-address-rotation.service.ts`](../src/issuers/issuer-address-rotation.service.ts) |
 | **Must not depend on** | `proofs`, `payments` |
 
 ### `payments` — [`src/payments/`](../src/payments/)
@@ -360,6 +360,30 @@ them, so both must run.
 
 Tests: [`anchoring-worker.service.spec.ts`](../src/jobs/anchoring-worker.service.spec.ts),
 [`anchoring-reconciler.service.spec.ts`](../src/jobs/anchoring-reconciler.service.spec.ts).
+
+### Issuer address rotation
+
+```
+POST /issuers/:id/address-rotations   check revision + conflicts → open rotation → reconcile
+every 60s   IssuerAddressRotationJob: reconcile open rotations that are due
+reconcile   lease → read contract address →
+              target  → finalize (adopt address, record history)
+              source  → submit rotate_issuer_address → read again → finalize | retry
+              other   → FAILED (contract conflict)
+```
+
+The database adopts a new issuer address only after the contract is observed
+holding it, so a timeout, a failed read or a restart can delay a rotation but
+never make the database claim an unconfirmed address. Every pass starts from
+the contract's observed state, which makes retries idempotent: a submission
+that timed out after landing is finalized, not resubmitted. A request must name
+the issuer `revision` it was based on; one open rotation per issuer and per
+target address is enforced by unique indexes. Retired addresses stay in
+`IssuerAddressHistory` and cannot be registered or rotated onto again.
+
+Tests: [`issuer-address-rotation.service.spec.ts`](../src/issuers/issuer-address-rotation.service.spec.ts),
+[`issuer-address-rotation.int-spec.ts`](../test/integration/issuer-address-rotation.int-spec.ts),
+[`issuer-address-rotation.e2e-spec.ts`](../test/e2e/issuer-address-rotation.e2e-spec.ts).
 
 ### Webhook delivery
 

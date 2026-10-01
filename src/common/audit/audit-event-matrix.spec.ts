@@ -5,6 +5,7 @@ import { AuthAuditService } from "../../auth/auth-audit.service";
 import { WalletRotationService } from "../../auth/wallet-rotation.service";
 import { sep53MessageHash } from "../../auth/wallet-signature";
 import { VerificationEventService } from "../../audit/verification-event.service";
+import { IssuerAddressRotationService } from "../../issuers/issuer-address-rotation.service";
 import { IssuersService } from "../../issuers/issuers.service";
 import { OrganizationLifecycleService } from "../../organizations/organization-lifecycle.service";
 import { OrganizationsService } from "../../organizations/organizations.service";
@@ -271,6 +272,8 @@ const scenarios: Scenario[] = [
             .fn()
             .mockResolvedValue({ id: ORGANIZATION_ID, createdById: USER_ID }),
         },
+        issuerAddressRotation: { findUnique: jest.fn().mockResolvedValue(null) },
+        issuerAddressHistory: { findFirst: jest.fn().mockResolvedValue(null) },
         issuer: {
           findUnique: jest.fn().mockResolvedValue(null),
           create: jest.fn().mockResolvedValue({
@@ -396,6 +399,86 @@ const scenarios: Scenario[] = [
       ).syncIssuerStatus(ADMIN, "issuer_1");
     },
   },
+  ...(
+    [
+      ["issuer.address_rotation_requested", "requesting an issuer address rotation", "request", null],
+      ["issuer.address_rotated", "confirming an issuer address rotation", "reconcile", "target"],
+      ["issuer.address_rotation_failed", "failing an issuer address rotation on a contract conflict", "reconcile", "other"],
+    ] as Array<[string, string, "request" | "reconcile", "target" | "other" | null]>
+  ).map(([event, name, operation, observed]): Scenario => ({
+    event,
+    outcome: "success",
+    name,
+    run: (sink) => {
+      const target = Keypair.fromRawEd25519Seed(Buffer.alloc(32, 13)).publicKey();
+      const elsewhere = Keypair.fromRawEd25519Seed(Buffer.alloc(32, 14)).publicKey();
+      const issuer = {
+        id: "issuer_1",
+        organizationId: ORGANIZATION_ID,
+        stellarAddress: ISSUER_ADDRESS,
+        status: "ACTIVE",
+        contractSyncedStatus: "ACTIVE",
+        revision: 0,
+      };
+      const rotation = {
+        id: "rotation_1",
+        issuerId: "issuer_1",
+        fromAddress: ISSUER_ADDRESS,
+        toAddress: target,
+        status: "PENDING",
+        attemptCount: 1,
+        lastError: null,
+        transactionHash: "d".repeat(64),
+        nextAttemptAt: null,
+        confirmedAt: null,
+        createdAt: new Date(),
+      };
+      const client = {
+        issuer: {
+          findUnique: jest.fn(async ({ where }: { where: { id?: string } }) =>
+            where.id ? issuer : null,
+          ),
+          findUniqueOrThrow: jest.fn().mockResolvedValue({ organizationId: ORGANIZATION_ID }),
+          updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+        },
+        issuerAddressHistory: {
+          findFirst: jest.fn().mockResolvedValue(null),
+          create: jest.fn().mockResolvedValue({}),
+        },
+        issuerAddressRotation: {
+          create: jest.fn().mockResolvedValue(rotation),
+          updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+          update: jest.fn().mockResolvedValue(rotation),
+          findUnique: jest.fn().mockResolvedValue(rotation),
+          findUniqueOrThrow: jest.fn().mockResolvedValue(rotation),
+        },
+        auditLog: sink.auditLog,
+        $transaction: jest.fn(),
+      };
+      client.$transaction.mockImplementation((run: (tx: typeof client) => unknown) => run(client));
+      const registry = {
+        isConfigured: true,
+        // A request's immediate reconcile finds the registry unreachable and
+        // schedules a retry, which writes no audit record of its own.
+        readIssuerAddress: jest.fn().mockResolvedValue(
+          observed === "target"
+            ? { state: "found", issuerAddress: target }
+            : observed === "other"
+              ? { state: "found", issuerAddress: elsewhere }
+              : { state: "failed", error: "unreachable" },
+        ),
+        rotateIssuerAddress: jest.fn(),
+      };
+      const service = new IssuerAddressRotationService(client as never, registry as never);
+
+      return operation === "request"
+        ? service.requestRotation(ADMIN, "issuer_1", {
+            newStellarAddress: target,
+            expectedRevision: 0,
+          })
+        : service.reconcile("rotation_1");
+    },
+  })),
   // ------------------------------------------------------------- webhook ---
   {
     event: "webhook.delivery_replayed",
