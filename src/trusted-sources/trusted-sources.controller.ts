@@ -12,6 +12,7 @@ import {
 import { ApiBearerAuth, ApiTags, ApiOperation, ApiResponse } from "@nestjs/swagger";
 import { AuthenticatedUser } from "../auth/auth.types";
 import { CurrentUser } from "../common/decorators/current-user.decorator";
+import { AuthenticatedRoute } from "../common/decorators/authorization-policy.decorator";
 import { AuthGuard } from "../common/guards/auth.guard";
 import { CreateTrustedSourceDto } from "./dto/create-trusted-source.dto";
 import { ListTrustedSourcesDto } from "./dto/list-trusted-sources.dto";
@@ -19,6 +20,7 @@ import { UpdateTrustedSourceDto } from "./dto/update-trusted-source.dto";
 import { TrustedSourcesService } from "./trusted-sources.service";
 
 @ApiBearerAuth()
+@AuthenticatedRoute({ ownership: "user" })
 @ApiTags("trusted-sources")
 @UseGuards(AuthGuard)
 @Controller("trusted-sources")

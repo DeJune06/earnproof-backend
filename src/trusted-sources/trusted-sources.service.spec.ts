@@ -43,7 +43,7 @@ describe("TrustedSourcesService", () => {
         },
       };
 
-      const service = new TrustedSourcesService(prisma as never);
+      const service = new TrustedSourcesService(prisma as never, { reevaluateSource: jest.fn().mockResolvedValue(0) } as never);
       const input: CreateTrustedSourceDto = {
         sourceAddress: validStellarAddress.toLowerCase(),
         displayName: "My Employer",
@@ -78,7 +78,7 @@ describe("TrustedSourcesService", () => {
 
     it("rejects invalid address format", async () => {
       const prisma = {};
-      const service = new TrustedSourcesService(prisma as never);
+      const service = new TrustedSourcesService(prisma as never, { reevaluateSource: jest.fn().mockResolvedValue(0) } as never);
       const input: CreateTrustedSourceDto = {
         sourceAddress: "invalid_address",
         displayName: "Test",
@@ -101,7 +101,7 @@ describe("TrustedSourcesService", () => {
         },
       };
 
-      const service = new TrustedSourcesService(prisma as never);
+      const service = new TrustedSourcesService(prisma as never, { reevaluateSource: jest.fn().mockResolvedValue(0) } as never);
       const input: CreateTrustedSourceDto = {
         sourceAddress: validStellarAddress,
         displayName: "Test",
@@ -160,7 +160,7 @@ describe("TrustedSourcesService", () => {
         },
       };
 
-      const service = new TrustedSourcesService(prisma as never);
+      const service = new TrustedSourcesService(prisma as never, { reevaluateSource: jest.fn().mockResolvedValue(0) } as never);
       const input: CreateTrustedSourceDto = {
         sourceAddress: validStellarAddress,
         displayName: "Test",
@@ -187,7 +187,7 @@ describe("TrustedSourcesService", () => {
         },
       };
 
-      const service = new TrustedSourcesService(prisma as never);
+      const service = new TrustedSourcesService(prisma as never, { reevaluateSource: jest.fn().mockResolvedValue(0) } as never);
       const input: CreateTrustedSourceDto = {
         sourceAddress: validStellarAddress,
         issuerId: "invalid_issuer",
@@ -211,7 +211,7 @@ describe("TrustedSourcesService", () => {
         },
       };
 
-      const service = new TrustedSourcesService(prisma as never);
+      const service = new TrustedSourcesService(prisma as never, { reevaluateSource: jest.fn().mockResolvedValue(0) } as never);
       const input: CreateTrustedSourceDto = {
         sourceAddress: validStellarAddress,
         issuerId: "issuer_1",
@@ -244,7 +244,7 @@ describe("TrustedSourcesService", () => {
         },
       };
 
-      const service = new TrustedSourcesService(prisma as never);
+      const service = new TrustedSourcesService(prisma as never, { reevaluateSource: jest.fn().mockResolvedValue(0) } as never);
       const result = await service.listTrustedSources(user, {});
 
       expect(result).toHaveLength(1);
@@ -267,7 +267,7 @@ describe("TrustedSourcesService", () => {
         },
       };
 
-      const service = new TrustedSourcesService(prisma as never);
+      const service = new TrustedSourcesService(prisma as never, { reevaluateSource: jest.fn().mockResolvedValue(0) } as never);
       await service.listTrustedSources(user, {
         sourceAddress: "GB",
       });
@@ -290,7 +290,7 @@ describe("TrustedSourcesService", () => {
         },
       };
 
-      const service = new TrustedSourcesService(prisma as never);
+      const service = new TrustedSourcesService(prisma as never, { reevaluateSource: jest.fn().mockResolvedValue(0) } as never);
       await service.listTrustedSources(user, {
         sourceType: "stellar",
       });
@@ -324,7 +324,7 @@ describe("TrustedSourcesService", () => {
         },
       };
 
-      const service = new TrustedSourcesService(prisma as never);
+      const service = new TrustedSourcesService(prisma as never, { reevaluateSource: jest.fn().mockResolvedValue(0) } as never);
       const result = await service.getTrustedSource(user, "ts_1");
 
       expect(result.id).toBe("ts_1");
@@ -344,7 +344,7 @@ describe("TrustedSourcesService", () => {
         },
       };
 
-      const service = new TrustedSourcesService(prisma as never);
+      const service = new TrustedSourcesService(prisma as never, { reevaluateSource: jest.fn().mockResolvedValue(0) } as never);
 
       await expect(
         service.getTrustedSource(user, "ts_1"),
@@ -392,7 +392,7 @@ describe("TrustedSourcesService", () => {
         },
       };
 
-      const service = new TrustedSourcesService(prisma as never);
+      const service = new TrustedSourcesService(prisma as never, { reevaluateSource: jest.fn().mockResolvedValue(0) } as never);
       const input: UpdateTrustedSourceDto = {
         displayName: "New Name",
         issuerId: "issuer_1",
@@ -419,7 +419,7 @@ describe("TrustedSourcesService", () => {
         },
       };
 
-      const service = new TrustedSourcesService(prisma as never);
+      const service = new TrustedSourcesService(prisma as never, { reevaluateSource: jest.fn().mockResolvedValue(0) } as never);
       const input: UpdateTrustedSourceDto = {
         displayName: "New Name",
       };
@@ -443,7 +443,7 @@ describe("TrustedSourcesService", () => {
         },
       };
 
-      const service = new TrustedSourcesService(prisma as never);
+      const service = new TrustedSourcesService(prisma as never, { reevaluateSource: jest.fn().mockResolvedValue(0) } as never);
       const input: UpdateTrustedSourceDto = {
         issuerId: "invalid_issuer",
       };
@@ -475,7 +475,7 @@ describe("TrustedSourcesService", () => {
         },
       };
 
-      const service = new TrustedSourcesService(prisma as never);
+      const service = new TrustedSourcesService(prisma as never, { reevaluateSource: jest.fn().mockResolvedValue(0) } as never);
       const result = await service.deleteTrustedSource(user, "ts_1");
 
       expect(result.status).toBe(ResourceStatus.DELETED);
@@ -508,7 +508,7 @@ describe("TrustedSourcesService", () => {
         },
       };
 
-      const service = new TrustedSourcesService(prisma as never);
+      const service = new TrustedSourcesService(prisma as never, { reevaluateSource: jest.fn().mockResolvedValue(0) } as never);
 
       await expect(
         service.deleteTrustedSource(user, "ts_1"),
@@ -542,7 +542,7 @@ describe("TrustedSourcesService", () => {
         },
       };
 
-      const service = new TrustedSourcesService(prisma as never);
+      const service = new TrustedSourcesService(prisma as never, { reevaluateSource: jest.fn().mockResolvedValue(0) } as never);
       const input: CreateTrustedSourceDto = {
         sourceAddress: validStellarAddress.toLowerCase(),
         displayName: "Test",
@@ -584,7 +584,7 @@ describe("TrustedSourcesService", () => {
         },
       };
 
-      const service = new TrustedSourcesService(prisma as never);
+      const service = new TrustedSourcesService(prisma as never, { reevaluateSource: jest.fn().mockResolvedValue(0) } as never);
       const input: CreateTrustedSourceDto = {
         sourceAddress: `  ${validStellarAddress}  `,
         displayName: "Test",
@@ -599,6 +599,68 @@ describe("TrustedSourcesService", () => {
           }),
         }),
       );
+    });
+  });
+
+  describe("eligibility re-evaluation", () => {
+    const record = {
+      id: "ts_1",
+      userId: user.id,
+      sourceAddress: validStellarAddress,
+      displayName: "Employer",
+      sourceType: "stellar",
+      issuerId: null,
+      status: ResourceStatus.ACTIVE,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      issuer: null,
+    };
+
+    function setup(existing: Record<string, unknown> = { id: "ts_1", displayName: "Employer", issuerId: null, sourceAddress: validStellarAddress }) {
+      const prisma = {
+        trustedSource: {
+          findUnique: jest.fn().mockResolvedValue(null),
+          findFirst: jest.fn().mockResolvedValue(existing),
+          create: jest.fn().mockResolvedValue(record),
+          update: jest.fn(({ data }) => Promise.resolve({ ...record, ...data })),
+        },
+        issuer: {
+          findUnique: jest.fn().mockResolvedValue({ id: "iss_1", status: ResourceStatus.ACTIVE }),
+        },
+        auditLog: { create: jest.fn().mockResolvedValue({}) },
+      };
+      const eligibility = { reevaluateSource: jest.fn().mockResolvedValue(1) };
+      return { eligibility, service: new TrustedSourcesService(prisma as never, eligibility as never) };
+    }
+
+    it("re-evaluates the sender's payments when a trusted source is created", async () => {
+      const { eligibility, service } = setup();
+      await service.createTrustedSource(user, { sourceAddress: validStellarAddress.toLowerCase() });
+      expect(eligibility.reevaluateSource).toHaveBeenCalledWith(user.id, validStellarAddress);
+    });
+
+    it("re-evaluates when the issuer link changes", async () => {
+      const { eligibility, service } = setup();
+      await service.updateTrustedSource(user, "ts_1", { issuerId: "iss_1" });
+      expect(eligibility.reevaluateSource).toHaveBeenCalledWith(user.id, validStellarAddress);
+    });
+
+    it("does not re-evaluate for a display-name-only change", async () => {
+      const { eligibility, service } = setup();
+      await service.updateTrustedSource(user, "ts_1", { displayName: "Renamed" });
+      expect(eligibility.reevaluateSource).not.toHaveBeenCalled();
+    });
+
+    it("re-evaluates when a trusted source is deleted", async () => {
+      const { eligibility, service } = setup();
+      await service.deleteTrustedSource(user, "ts_1");
+      expect(eligibility.reevaluateSource).toHaveBeenCalledWith(user.id, validStellarAddress);
+    });
+
+    it("does not re-evaluate anything for another user's trusted source", async () => {
+      const { eligibility, service } = setup(null as never);
+      await expect(service.deleteTrustedSource(user, "ts_1")).rejects.toBeInstanceOf(ForbiddenException);
+      expect(eligibility.reevaluateSource).not.toHaveBeenCalled();
     });
   });
 });

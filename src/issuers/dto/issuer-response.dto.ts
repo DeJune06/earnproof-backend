@@ -17,6 +17,12 @@ export class IssuerResponseDto {
   })
   status: ResourceStatus;
 
+  @ApiProperty({
+    description:
+      "Revision number for optimistic concurrency control. Incremented on each update.",
+  })
+  revision: number;
+
   @ApiPropertyOptional({
     description: "Hash of the public metadata for integrity verification",
     nullable: true,
@@ -40,6 +46,12 @@ export class IssuerResponseDto {
 
   @ApiPropertyOptional({ nullable: true })
   contractSyncedAt?: Date | null;
+
+  @ApiPropertyOptional({
+    description:
+      "Optimistic-concurrency revision. Send it as expectedRevision when requesting an address rotation.",
+  })
+  revision?: number;
 
   @ApiPropertyOptional({
     description: "ISO 8601 timestamp when issuer was verified/activated",

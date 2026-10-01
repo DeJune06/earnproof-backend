@@ -22,6 +22,8 @@ identifier namespace. Keys are never shared across purposes.
 | Purpose | Env var(s) | Key identifier | Rotation support |
 |---|---|---|---|
 | Payment amount / webhook secret encryption (AES-256-GCM) | `PAYMENT_ENCRYPTION_KEY`, `PAYMENT_ENCRYPTION_KEY_V0`, `_V1`, ... + `PAYMENT_ENCRYPTION_KEY_VERSION` | Numeric version embedded in ciphertext (`enc:v<N>:...`) | Yes — staged, dual-read |
+| Payment amount / webhook secret encryption (AES-256-GCM) | `PAYMENT_ENCRYPTION_KEY`, `PAYMENT_ENCRYPTION_KEY_V0`, `_V1`, ... + `PAYMENT_ENCRYPTION_KEY_VERSION` | Numeric version embedded in ciphertext (`enc:v<N>:...`) | Yes — staged, dual-read (this pass) |
+| Payment address encryption and lookup tokens (AES-256-GCM, HMAC-SHA256; keys derived with HKDF) | Derived from `PAYMENT_ENCRYPTION_KEY_V<N>`; no separate variable | `aenc:v<N>:...` ciphertext, `hmac:v<N>:...` token | Yes — staged, dual-read, backfill re-protects |
 | Verification-event metadata hashing (HMAC-SHA256) | `VERIFICATION_HASH_SALT_V0`, `_V1`, ... + `VERIFICATION_HASH_SALT_VERSION` | Numeric version stored per-row (`saltVersion` column) | Yes — pre-existing pattern, mirrored by payment encryption |
 | Session token hashing | `SESSION_SECRET` | None (single key) | Documented policy only, no code change |
 | Credential signing (HMAC-SHA256 over canonicalized payload) | `CREDENTIAL_SIGNING_SECRET`, `CREDENTIAL_SIGNING_SECRET_V0`, `_V1`, ... + `CREDENTIAL_SIGNING_KEY_VERSION`, optional `_V<N>_VERIFY_UNTIL` | Non-secret `keyId` (`earnproof-v<N>`) carried in the credential's own `proof` block | Yes — staged, verify-only, with an optional time-bounded overlap window |
@@ -105,6 +107,12 @@ configured for as long as any row might still hold `enc:v0:...` ciphertext
 in practice this window is indefinite unless a backfill job re-encrypts
 old rows under v1 — no such backfill exists today; retiring v0 is an
 explicit operator decision, not automatic).
+
+Payment account addresses are the exception: their keys are derived from the
+same `PAYMENT_ENCRYPTION_KEY_V<N>`, and `npm run payments:backfill-addresses`
+re-encrypts and re-tokens them under the active version. Run it after Stage 2
+and before retiring an old version. See
+[payment address encryption](payment-address-encryption.md).
 
 **Stage 4 — retire.** Once satisfied nothing still needs v0 (verified via a
 backfill, a data audit, or an accepted retention/expiry cutoff), remove

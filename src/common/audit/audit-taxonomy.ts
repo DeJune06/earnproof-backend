@@ -71,7 +71,10 @@ export type AuditWriteFailureBehavior = "fail_closed" | "fail_open";
 
 /** How the tenant (owning scope) of an event is recovered from the row. */
 export type AuditTenantSource =
-  /** `AuditLog.resourceId` is itself the tenant (the organisation row). */
+  /**
+   * `AuditLog.resourceId` is itself the tenant: the organisation row, or the
+   * user account for account-administration events.
+   */
   | "resource_id"
   /** `AuditLog.metadata.organizationId`. */
   | "metadata_organization_id"
@@ -164,6 +167,28 @@ export const AUDIT_EVENTS: readonly AuditEventDefinition[] = [
     description: "A wallet proved control of its key and a session was issued.",
   },
   {
+    type: "authentication.wallet_rotated",
+    domain: "authentication",
+    store: "audit_log",
+    match: {
+      store: "audit_log",
+      action: "user.wallet_rotated",
+      resourceType: "user",
+    },
+    actorTypes: ["user"],
+    outcomes: ["success"],
+    tenant: "actor_id",
+    writeFailure: "fail_closed",
+    requiredMetadata: [
+      "rotationId",
+      "previousWalletHash",
+      "newWalletHash",
+      "sessionsRevoked",
+    ],
+    description:
+      "An account proved control of its current and replacement keys and its wallet address was replaced; every session was revoked.",
+  },
+  {
     type: "authentication.signature_invalid",
     domain: "authentication",
     store: "auth_audit_event",
@@ -198,6 +223,19 @@ export const AUDIT_EVENTS: readonly AuditEventDefinition[] = [
     writeFailure: "fail_open",
     requiredMetadata: [],
     description: "An already-consumed challenge was presented a second time.",
+  },
+  {
+    type: "authentication.account_inactive",
+    domain: "authentication",
+    store: "auth_audit_event",
+    match: { store: "auth_audit_event", eventType: AuthEventType.ACCOUNT_INACTIVE },
+    actorTypes: ["wallet"],
+    outcomes: ["denied"],
+    tenant: "wallet_hash",
+    writeFailure: "fail_open",
+    requiredMetadata: [],
+    description:
+      "A suspended, revoked or deleted account proved wallet control and was refused a session.",
   },
   // ------------------------------------------------------- authorization ---
   {
@@ -284,6 +322,60 @@ export const AUDIT_EVENTS: readonly AuditEventDefinition[] = [
     writeFailure: "fail_closed",
     requiredMetadata: ["state", "status"],
     description: "An issuer's status was synchronised with the on-chain registry.",
+  },
+  {
+    type: "issuer.address_rotation_requested",
+    domain: "issuer",
+    store: "audit_log",
+    match: {
+      store: "audit_log",
+      action: "issuer.address_rotation.requested",
+      resourceType: "issuer_address_rotation",
+    },
+    actorTypes: ["user"],
+    outcomes: ["success"],
+    tenant: "metadata_organization_id",
+    writeFailure: "fail_closed",
+    requiredMetadata: ["organizationId", "issuerId", "fromAddress", "toAddress", "expectedRevision"],
+    publicIdentifierFields: ["fromAddress", "toAddress"],
+    description:
+      "An operator requested an issuer address rotation; the issuer's address is unchanged until the contract confirms it.",
+  },
+  {
+    type: "issuer.address_rotated",
+    domain: "issuer",
+    store: "audit_log",
+    match: {
+      store: "audit_log",
+      action: "issuer.address_rotation.confirmed",
+      resourceType: "issuer_address_rotation",
+    },
+    actorTypes: ["user", "system"],
+    outcomes: ["success"],
+    tenant: "metadata_organization_id",
+    writeFailure: "fail_closed",
+    requiredMetadata: ["organizationId", "issuerId", "fromAddress", "toAddress", "transactionHash"],
+    publicIdentifierFields: ["fromAddress", "toAddress"],
+    description:
+      "The contract was observed holding the new issuer address and the database adopted it; the previous address was moved to history.",
+  },
+  {
+    type: "issuer.address_rotation_failed",
+    domain: "issuer",
+    store: "audit_log",
+    match: {
+      store: "audit_log",
+      action: "issuer.address_rotation.failed",
+      resourceType: "issuer_address_rotation",
+    },
+    actorTypes: ["user", "system"],
+    outcomes: ["success"],
+    tenant: "metadata_organization_id",
+    writeFailure: "fail_closed",
+    requiredMetadata: ["organizationId", "issuerId", "reason"],
+    publicIdentifierFields: ["fromAddress", "toAddress"],
+    description:
+      "An issuer address rotation was closed without changing the issuer: a contract or database conflict, or retries exhausted.",
   },
   // --------------------------------------------------------------- proof ---
   {
@@ -442,6 +534,91 @@ export const AUDIT_EVENTS: readonly AuditEventDefinition[] = [
     description: "An administrator changed a tenant organisation's profile.",
   },
   {
+    type: "operator.organization_archived",
+    domain: "operator",
+    store: "audit_log",
+    match: {
+      store: "audit_log",
+      action: "organization.archived",
+      resourceType: "Organization",
+    },
+    actorTypes: ["user"],
+    outcomes: ["success"],
+    tenant: "resource_id",
+    writeFailure: "fail_closed",
+    requiredMetadata: ["archivedAt"],
+    description:
+      "An administrator archived an organization, disabling its keys, webhooks, issuer activation and attestation issuance.",
+  },
+  {
+    type: "operator.organization_restored",
+    domain: "operator",
+    store: "audit_log",
+    match: {
+      store: "audit_log",
+      action: "organization.restored",
+      resourceType: "Organization",
+    },
+    actorTypes: ["user"],
+    outcomes: ["success"],
+    tenant: "resource_id",
+    writeFailure: "fail_closed",
+    requiredMetadata: [],
+    description:
+      "An administrator restored an archived organization.",
+  },
+  {
+    type: "operator.organization_legal_hold_placed",
+    domain: "operator",
+    store: "audit_log",
+    match: {
+      store: "audit_log",
+      action: "organization.legal_hold_placed",
+      resourceType: "Organization",
+    },
+    actorTypes: ["user"],
+    outcomes: ["success"],
+    tenant: "resource_id",
+    writeFailure: "fail_closed",
+    requiredMetadata: ["reference"],
+    description:
+      "An administrator placed a legal hold, which blocks deletion until released.",
+  },
+  {
+    type: "operator.organization_legal_hold_released",
+    domain: "operator",
+    store: "audit_log",
+    match: {
+      store: "audit_log",
+      action: "organization.legal_hold_released",
+      resourceType: "Organization",
+    },
+    actorTypes: ["user"],
+    outcomes: ["success"],
+    tenant: "resource_id",
+    writeFailure: "fail_closed",
+    requiredMetadata: ["reference"],
+    description:
+      "An administrator released an organization's legal hold.",
+  },
+  {
+    type: "operator.organization_deleted",
+    domain: "operator",
+    store: "audit_log",
+    match: {
+      store: "audit_log",
+      action: "organization.deleted",
+      resourceType: "Organization",
+    },
+    actorTypes: ["user"],
+    outcomes: ["success"],
+    tenant: "resource_id",
+    writeFailure: "fail_closed",
+    requiredMetadata: ["previousStatus", "apiKeysRevoked", "webhooksDeleted", "webhookDeliveriesDeleted", "idempotencyRecordsDeleted"],
+    description:
+      "An administrator deleted an archived organization after its dependency, legal-hold and retention checks passed.",
+  },
+  {
     type: "operator.payment_classification_updated",
     domain: "operator",
     store: "audit_log",
@@ -507,6 +684,63 @@ export const AUDIT_EVENTS: readonly AuditEventDefinition[] = [
     requiredMetadata: ["sourceAddressHash", "retentionPolicy"],
     description:
       "A trusted payer was soft-deleted; history referencing it is retained.",
+  },
+  {
+    type: "operator.user_status_changed",
+    type: "operator.payment_backfill_requested",
+    domain: "operator",
+    store: "audit_log",
+    match: {
+      store: "audit_log",
+      action: "user.status_changed",
+      resourceType: "user",
+    },
+    actorTypes: ["user"],
+    outcomes: ["success"],
+    tenant: "resource_id",
+    writeFailure: "fail_closed",
+    requiredMetadata: ["previousStatus", "newStatus", "sessionsRevoked"],
+    description:
+      "An administrator moved an account between lifecycle states; suspension and revocation also revoke its sessions.",
+  },
+  {
+    type: "operator.user_role_changed",
+      action: "payment_backfill.requested",
+      resourceType: "payment_backfill",
+    },
+    actorTypes: ["user"],
+    outcomes: ["success"],
+    tenant: "actor_id",
+    writeFailure: "fail_closed",
+    requiredMetadata: ["startLedger", "endLedger"],
+    description:
+      "An administrator queued a ledger-range rescan of a user's incoming payments.",
+  },
+  {
+    type: "operator.payment_backfill_cancelled",
+    domain: "operator",
+    store: "audit_log",
+    match: {
+      store: "audit_log",
+      action: "user.role_changed",
+      resourceType: "user",
+    },
+    actorTypes: ["user"],
+    outcomes: ["success"],
+    tenant: "resource_id",
+    writeFailure: "fail_closed",
+    requiredMetadata: ["previousRole", "newRole"],
+    description: "An administrator changed an account's global role.",
+      action: "payment_backfill.cancelled",
+      resourceType: "payment_backfill",
+    },
+    actorTypes: ["user"],
+    outcomes: ["success"],
+    tenant: "actor_id",
+    writeFailure: "fail_closed",
+    requiredMetadata: ["previousStatus"],
+    description:
+      "An administrator cancelled a payment backfill; committed pages are kept.",
   },
 ];
 

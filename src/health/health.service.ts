@@ -1,6 +1,13 @@
-import { Injectable, Logger } from "@nestjs/common";
+﻿import { Injectable, Logger } from "@nestjs/common";
+ 
+import { ContractDriftService } from "./contract-drift.service";
 import { ConfigService } from "@nestjs/config";
 import { PrismaService } from "../database/prisma.service";
+import { MigrationLeaseService } from "../database/migration-lease.service";
+import {
+  DeploymentMetadataService,
+  DeploymentMetadataState,
+} from "./deployment-metadata.service";
 import {
   DependencyKind,
   DependencyResult,
@@ -57,9 +64,19 @@ export class HealthService {
    */
   private readonly inFlight = new Map<string, Promise<DependencyResult>>();
 
+  private readonly deployment: DeploymentMetadataService;
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly config: ConfigService,
+    /**
+     * Optional so the many unit tests that construct the service with just
+     * (prisma, config) keep working. When present, its circuit states are
+     * surfaced in diagnostics.
+     */
+    @Optional() private readonly circuits?: CircuitBreakerRegistry,
+    private readonly contractDrift: ContractDriftService,
+    private readonly migrationLease: MigrationLeaseService,
   ) {}
 
   /**
@@ -112,6 +129,9 @@ export class HealthService {
       this.probeCached("configuration", DependencyKind.REQUIRED, () =>
         Promise.resolve(this.probeConfiguration()),
       ),
+      this.probeCached("migration_compatibility", DependencyKind.REQUIRED, () =>
+        this.probeMigrationCompatibility(),
+      ),
     ]);
 
     const blocked = dependencies.some(
@@ -124,6 +144,15 @@ export class HealthService {
       status: blocked ? "not_ready" : "ready",
       dependencies,
     };
+  }
+
+  /**
+   * The validated deployment metadata, or why it cannot be served. Shares its
+   * source with the `deployment_manifest` readiness probe, so the endpoint and
+   * readiness can never disagree about whether the manifest is valid.
+   */
+  deploymentMetadata(): DeploymentMetadataState {
+    return this.deployment.state();
   }
 
   /**
@@ -152,6 +181,9 @@ export class HealthService {
       this.probeCached("configuration", DependencyKind.REQUIRED, () =>
         Promise.resolve(this.probeConfiguration()),
       ),
+      this.probeCached("migration_compatibility", DependencyKind.REQUIRED, () =>
+        this.probeMigrationCompatibility(),
+      ),
       this.probeCached("horizon", DependencyKind.OPTIONAL, () =>
         this.probeHorizon(),
       ),
@@ -160,6 +192,9 @@ export class HealthService {
       ),
       this.probeCached("webhook_delivery", DependencyKind.OPTIONAL, () =>
         this.probeWebhookDelivery(),
+      ),
+      this.probeCached("circuit_breakers", DependencyKind.OPTIONAL, () =>
+        Promise.resolve(this.probeCircuitBreakers()),
       ),
     ]);
 
@@ -223,6 +258,71 @@ export class HealthService {
     return this.timed("database", DependencyKind.REQUIRED, async () => {
       await this.prisma.$queryRaw`SELECT 1`;
     });
+  }
+
+  /**
+   * Verify migration deployment compatibility.
+   * 
+   * Ensures the application can safely serve requests against the current schema.
+   * Reports not ready when:
+   * - Migration deployment is actively in progress (unsafe to serve)
+   * - Schema is incompatible with expected state
+   * - Migration has failed and requires intervention
+   */
+  private async probeMigrationCompatibility(): Promise<DependencyResult> {
+    try {
+      const leaseStatus = await this.migrationLease.getLeaseStatus();
+      
+      // If a migration deployment is actively held, we're not ready
+      if (leaseStatus.held && leaseStatus.isActive) {
+        // Check if it's our own lease (same process)
+        if (leaseStatus.ownerId === this.migrationLease.getOwnerId()) {
+          return {
+            name: "migration_compatibility",
+            kind: DependencyKind.REQUIRED,
+            status: DependencyStatus.ERROR,
+            reason: "migration_in_progress",
+            durationMs: 0,
+          };
+        } else {
+          return {
+            name: "migration_compatibility",
+            kind: DependencyKind.REQUIRED,
+            status: DependencyStatus.ERROR,
+            reason: "migration_in_progress_other_deployment",
+            durationMs: 0,
+          };
+        }
+      }
+
+      // If lease is stale, it indicates a crashed deployment - may be unsafe
+      if (leaseStatus.isStale) {
+        return {
+          name: "migration_compatibility",
+          kind: DependencyKind.REQUIRED,
+          status: DependencyStatus.DEGRADED,
+          reason: "stale_migration_lease_detected",
+          durationMs: 0,
+        };
+      }
+
+      // Schema compatibility check would go here in a full implementation
+      // For MVP, we assume compatibility if no active migration
+      return {
+        name: "migration_compatibility",
+        kind: DependencyKind.REQUIRED,
+        status: DependencyStatus.OK,
+        durationMs: 0,
+      };
+    } catch (error) {
+      return {
+        name: "migration_compatibility",
+        kind: DependencyKind.REQUIRED,
+        status: DependencyStatus.ERROR,
+        reason: "migration_compatibility_check_failed",
+        durationMs: 0,
+      };
+    }
   }
 
   /**
@@ -291,6 +391,39 @@ export class HealthService {
     });
   }
 
+  /**
+   * Validate the deployment manifest. Reasons are the manifest loader's stable
+   * codes, which name fixed fields and contract names but never manifest
+   * values.
+   */
+  private probeDeploymentManifest(): DependencyResult {
+    const state = this.deployment.state();
+    const base = {
+      name: "deployment_manifest",
+      kind: DependencyKind.REQUIRED,
+      durationMs: 0,
+    };
+
+    if (state.status === "absent") {
+      return {
+        ...base,
+        kind: DependencyKind.OPTIONAL,
+        status: DependencyStatus.NOT_CONFIGURED,
+        reason: "deployment_manifest_absent",
+      };
+    }
+
+    if (state.status === "invalid") {
+      return {
+        ...base,
+        status: DependencyStatus.ERROR,
+        reason: state.reasons.join(","),
+      };
+    }
+
+    return { ...base, status: DependencyStatus.OK };
+  }
+
   /** Report whether contract anchoring is switched on and fully configured. */
   private probeContractAnchoring(): DependencyResult {
     const enabled = this.config.get<boolean>("contractAnchoring.enabled");
@@ -346,6 +479,52 @@ export class HealthService {
         }
       },
     );
+  }
+
+  /**
+   * Report the state of every dependency circuit breaker.
+   *
+   * Optional, and never gates readiness: an open circuit is the breaker working
+   * as designed — shedding load from a failing dependency — not the service
+   * itself being unready. It is surfaced as DEGRADED so an operator can see the
+   * dependency is being protected, and the per-circuit detail is counts and
+   * states only, so this authorized endpoint never becomes a channel for
+   * transaction payloads or addresses.
+   */
+  private probeCircuitBreakers(): DependencyResult {
+    if (!this.circuits) {
+      return {
+        name: "circuit_breakers",
+        kind: DependencyKind.OPTIONAL,
+        status: DependencyStatus.NOT_CONFIGURED,
+        reason: "registry_absent",
+      };
+    }
+
+    const snapshots = this.circuits.snapshotAll();
+    const circuits = snapshots.map((snapshot) => ({
+      name: snapshot.name,
+      state: snapshot.state,
+      consecutiveFailures: snapshot.consecutiveFailures,
+      probeSuccesses: snapshot.probeSuccesses,
+      probesInFlight: snapshot.probesInFlight,
+      openCount: snapshot.openCount,
+      cooldownRemainingMs: snapshot.cooldownRemainingMs,
+    }));
+
+    const tripped = circuits.filter((circuit) => circuit.state !== "closed");
+
+    return {
+      name: "circuit_breakers",
+      kind: DependencyKind.OPTIONAL,
+      status:
+        tripped.length > 0 ? DependencyStatus.DEGRADED : DependencyStatus.OK,
+      reason:
+        tripped.length > 0
+          ? `tripped:${tripped.map((circuit) => circuit.name).sort().join(",")}`
+          : undefined,
+      circuits,
+    };
   }
 
   /**

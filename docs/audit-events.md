@@ -35,15 +35,20 @@ and continues.
 | --- | --- | --- | --- | --- | --- | --- |
 | `authentication.challenge_created` | authentication | `auth_audit_event` | wallet | success | wallet hash | fail_open |
 | `authentication.challenge_verified` | authentication | `auth_audit_event` | wallet | success | wallet hash | fail_open |
+| `authentication.wallet_rotated` | authentication | `audit_log` | user | success | actor | fail_closed |
 | `authentication.signature_invalid` | authentication | `auth_audit_event` | wallet | denied | wallet hash | fail_open |
 | `authentication.challenge_expired` | authentication | `auth_audit_event` | wallet | denied | wallet hash | fail_open |
 | `authentication.challenge_replayed` | authentication | `auth_audit_event` | wallet | denied | wallet hash | fail_open |
+| `authentication.account_inactive` | authentication | `auth_audit_event` | wallet | denied | wallet hash | fail_open |
 | `authorization.rate_limited` | authorization | `auth_audit_event` | wallet | denied | wallet hash | fail_open |
 | `authorization.api_key_authenticated` | authorization | `audit_log` | api_key | success | `metadata.organizationId` | fail_open |
 | `issuer.created` | issuer | `audit_log` | user | success | `metadata.organizationId` | fail_closed |
 | `issuer.metadata_updated` | issuer | `audit_log` | user | success | actor | fail_closed |
 | `issuer.status_updated` | issuer | `audit_log` | user | success | actor | fail_closed |
 | `issuer.status_synced` | issuer | `audit_log` | user | success | actor | fail_closed |
+| `issuer.address_rotation_requested` | issuer | `audit_log` | user | success | `metadata.organizationId` | fail_closed |
+| `issuer.address_rotated` | issuer | `audit_log` | user, system | success | `metadata.organizationId` | fail_closed |
+| `issuer.address_rotation_failed` | issuer | `audit_log` | user, system | success | `metadata.organizationId` | fail_closed |
 | `proof.verification_recorded` | proof | `verification_event_log` | system | success, denied | proof | fail_open |
 | `proof.revoked` | proof | `audit_log` | user | success | resource | fail_closed |
 | `anchoring_intent.retried` | proof | `audit_log` | user | success | resource | fail_closed |
@@ -54,10 +59,19 @@ and continues.
 | `webhook.delivery_replayed` | webhook | `audit_log` | user | success | actor | fail_closed |
 | `operator.organization_created` | operator | `audit_log` | user | success | resource | fail_closed |
 | `operator.organization_updated` | operator | `audit_log` | user | success | resource | fail_closed |
+| `operator.organization_archived` | operator | `audit_log` | user | success | resource | fail_closed |
+| `operator.organization_restored` | operator | `audit_log` | user | success | resource | fail_closed |
+| `operator.organization_legal_hold_placed` | operator | `audit_log` | user | success | resource | fail_closed |
+| `operator.organization_legal_hold_released` | operator | `audit_log` | user | success | resource | fail_closed |
+| `operator.organization_deleted` | operator | `audit_log` | user | success | resource | fail_closed |
 | `operator.payment_classification_updated` | operator | `audit_log` | user | success | actor | fail_closed |
 | `operator.trusted_source_created` | operator | `audit_log` | user | success | actor | fail_closed |
 | `operator.trusted_source_updated` | operator | `audit_log` | user | success | actor | fail_closed |
 | `operator.trusted_source_deleted` | operator | `audit_log` | user | success | actor | fail_closed |
+| `operator.user_status_changed` | operator | `audit_log` | user | success | resource | fail_closed |
+| `operator.user_role_changed` | operator | `audit_log` | user | success | resource | fail_closed |
+| `operator.payment_backfill_requested` | operator | `audit_log` | user | success | actor | fail_closed |
+| `operator.payment_backfill_cancelled` | operator | `audit_log` | user | success | actor | fail_closed |
 
 ### Stable types and persisted shapes
 

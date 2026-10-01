@@ -2,12 +2,18 @@ import { AuthEventType, VerificationOutcome } from "@prisma/client";
 import { Keypair } from "@stellar/stellar-base";
 import { ApiKeyService } from "../../api-keys/api-key.service";
 import { AuthAuditService } from "../../auth/auth-audit.service";
+import { WalletRotationService } from "../../auth/wallet-rotation.service";
+import { sep53MessageHash } from "../../auth/wallet-signature";
 import { VerificationEventService } from "../../audit/verification-event.service";
+import { IssuerAddressRotationService } from "../../issuers/issuer-address-rotation.service";
 import { IssuersService } from "../../issuers/issuers.service";
+import { OrganizationLifecycleService } from "../../organizations/organization-lifecycle.service";
 import { OrganizationsService } from "../../organizations/organizations.service";
+import { PaymentBackfillService } from "../../payments/payment-backfill.service";
 import { PaymentsService } from "../../payments/payments.service";
 import { ProofsService } from "../../proofs/proofs.service";
 import { TrustedSourcesService } from "../../trusted-sources/trusted-sources.service";
+import { UsersService } from "../../users/users.service";
 import { WebhooksService } from "../../webhooks/webhooks.service";
 import { findForbiddenAuditContent } from "./audit-redaction";
 import {
@@ -267,6 +273,8 @@ const scenarios: Scenario[] = [
             .fn()
             .mockResolvedValue({ id: ORGANIZATION_ID, createdById: USER_ID }),
         },
+        issuerAddressRotation: { findUnique: jest.fn().mockResolvedValue(null) },
+        issuerAddressHistory: { findFirst: jest.fn().mockResolvedValue(null) },
         issuer: {
           findUnique: jest.fn().mockResolvedValue(null),
           create: jest.fn().mockResolvedValue({
@@ -342,6 +350,9 @@ const scenarios: Scenario[] = [
             .fn()
             .mockResolvedValue({ ...issuer, status: "ACTIVE" }),
         },
+        organization: {
+          findUnique: jest.fn().mockResolvedValue({ archivedAt: null }),
+        },
         auditLog: sink.auditLog,
       };
 
@@ -389,6 +400,86 @@ const scenarios: Scenario[] = [
       ).syncIssuerStatus(ADMIN, "issuer_1");
     },
   },
+  ...(
+    [
+      ["issuer.address_rotation_requested", "requesting an issuer address rotation", "request", null],
+      ["issuer.address_rotated", "confirming an issuer address rotation", "reconcile", "target"],
+      ["issuer.address_rotation_failed", "failing an issuer address rotation on a contract conflict", "reconcile", "other"],
+    ] as Array<[string, string, "request" | "reconcile", "target" | "other" | null]>
+  ).map(([event, name, operation, observed]): Scenario => ({
+    event,
+    outcome: "success",
+    name,
+    run: (sink) => {
+      const target = Keypair.fromRawEd25519Seed(Buffer.alloc(32, 13)).publicKey();
+      const elsewhere = Keypair.fromRawEd25519Seed(Buffer.alloc(32, 14)).publicKey();
+      const issuer = {
+        id: "issuer_1",
+        organizationId: ORGANIZATION_ID,
+        stellarAddress: ISSUER_ADDRESS,
+        status: "ACTIVE",
+        contractSyncedStatus: "ACTIVE",
+        revision: 0,
+      };
+      const rotation = {
+        id: "rotation_1",
+        issuerId: "issuer_1",
+        fromAddress: ISSUER_ADDRESS,
+        toAddress: target,
+        status: "PENDING",
+        attemptCount: 1,
+        lastError: null,
+        transactionHash: "d".repeat(64),
+        nextAttemptAt: null,
+        confirmedAt: null,
+        createdAt: new Date(),
+      };
+      const client = {
+        issuer: {
+          findUnique: jest.fn(async ({ where }: { where: { id?: string } }) =>
+            where.id ? issuer : null,
+          ),
+          findUniqueOrThrow: jest.fn().mockResolvedValue({ organizationId: ORGANIZATION_ID }),
+          updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+        },
+        issuerAddressHistory: {
+          findFirst: jest.fn().mockResolvedValue(null),
+          create: jest.fn().mockResolvedValue({}),
+        },
+        issuerAddressRotation: {
+          create: jest.fn().mockResolvedValue(rotation),
+          updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+          update: jest.fn().mockResolvedValue(rotation),
+          findUnique: jest.fn().mockResolvedValue(rotation),
+          findUniqueOrThrow: jest.fn().mockResolvedValue(rotation),
+        },
+        auditLog: sink.auditLog,
+        $transaction: jest.fn(),
+      };
+      client.$transaction.mockImplementation((run: (tx: typeof client) => unknown) => run(client));
+      const registry = {
+        isConfigured: true,
+        // A request's immediate reconcile finds the registry unreachable and
+        // schedules a retry, which writes no audit record of its own.
+        readIssuerAddress: jest.fn().mockResolvedValue(
+          observed === "target"
+            ? { state: "found", issuerAddress: target }
+            : observed === "other"
+              ? { state: "found", issuerAddress: elsewhere }
+              : { state: "failed", error: "unreachable" },
+        ),
+        rotateIssuerAddress: jest.fn(),
+      };
+      const service = new IssuerAddressRotationService(client as never, registry as never);
+
+      return operation === "request"
+        ? service.requestRotation(ADMIN, "issuer_1", {
+            newStellarAddress: target,
+            expectedRevision: 0,
+          })
+        : service.reconcile("rotation_1");
+    },
+  })),
   // ------------------------------------------------------------- webhook ---
   {
     event: "webhook.delivery_replayed",
@@ -415,6 +506,60 @@ const scenarios: Scenario[] = [
         delivery as never,
         configDouble({ paymentEncryptionKey: "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=" }),
       ).replayDelivery(ORGANIZATION_ID, "delivery_1", USER_ID);
+    },
+  },
+  {
+    event: "authentication.wallet_rotated",
+    outcome: "success",
+    name: "rotating an account's wallet address",
+    run: (sink) => {
+      const currentKey = Keypair.fromRawEd25519Seed(Buffer.alloc(32, 3));
+      const replacementKey = Keypair.fromRawEd25519Seed(Buffer.alloc(32, 11));
+      const sign = (key: Keypair, message: string) =>
+        key.sign(sep53MessageHash(message)).toString("base64");
+      const rotation = {
+        id: "rotation_1",
+        userId: USER_ID,
+        currentWalletAddress: WALLET_ADDRESS,
+        newWalletAddress: replacementKey.publicKey(),
+        currentMessage: "current",
+        newMessage: "replacement",
+        networkPassphrase: "Test SDF Network ; September 2015",
+        origin: "http://localhost:3000",
+      };
+      const tx = {
+        user: {
+          findUnique: jest.fn().mockResolvedValue(null),
+          updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+        },
+        authSession: { updateMany: jest.fn().mockResolvedValue({ count: 2 }) },
+        walletRotation: {
+          update: jest.fn().mockResolvedValue({}),
+          updateMany: jest.fn().mockResolvedValue({ count: 0 }),
+        },
+        auditLog: sink.auditLog,
+      };
+      const prisma = {
+        walletRotation: {
+          updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+          findUnique: jest.fn().mockResolvedValue(rotation),
+        },
+        $transaction: jest.fn((run: (client: typeof tx) => unknown) => run(tx)),
+      };
+      return new WalletRotationService(
+        prisma as never,
+        configDouble({
+          appUrl: "http://localhost:3000",
+          "stellar.networkPassphrase": "Test SDF Network ; September 2015",
+        }),
+      ).complete(
+        { id: USER_ID, walletAddress: WALLET_ADDRESS, walletHash: "unused", role: "WORKER" },
+        "rotation_1",
+        {
+          currentSignature: sign(currentKey, rotation.currentMessage),
+          newSignature: sign(replacementKey, rotation.newMessage),
+        },
+      );
     },
   },
   // ------------------------------------------------------------ operator ---
@@ -476,6 +621,64 @@ const scenarios: Scenario[] = [
       );
     },
   },
+  ...(
+    [
+      ["operator.organization_archived", "archiving a tenant organisation", "archive", { archivedAt: null }],
+      ["operator.organization_restored", "restoring a tenant organisation", "restore", { archivedAt: new Date("2026-01-01T00:00:00.000Z") }],
+      ["operator.organization_legal_hold_placed", "placing a legal hold", "placeLegalHold", { legalHoldAt: null }],
+      ["operator.organization_legal_hold_released", "releasing a legal hold", "releaseLegalHold", { legalHoldAt: new Date("2026-01-01T00:00:00.000Z"), legalHoldReference: "LEGAL-2026-001" }],
+      ["operator.organization_deleted", "deleting an archived tenant organisation", "deleteOrganization", { archivedAt: new Date("2025-01-01T00:00:00.000Z") }],
+    ] as Array<[string, string, string, Record<string, unknown>]>
+  ).map(([event, name, operation, state]): Scenario => ({
+    event,
+    outcome: "success",
+    name,
+    run: (sink) => {
+      const org = {
+        id: ORGANIZATION_ID,
+        status: "ACTIVE",
+        archivedAt: null,
+        legalHoldAt: null,
+        legalHoldReference: null,
+        deletedAt: null,
+        ...state,
+      };
+      const tx = {
+        $queryRaw: jest.fn().mockResolvedValue([]),
+        organization: {
+          findUnique: jest.fn().mockResolvedValue(org),
+          updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+          update: jest.fn().mockResolvedValue(org),
+        },
+        issuer: { count: jest.fn().mockResolvedValue(0) },
+        apiKey: { updateMany: jest.fn().mockResolvedValue({ count: 2 }) },
+        webhook: {
+          findMany: jest.fn().mockResolvedValue([{ id: "webhook_1" }]),
+          deleteMany: jest.fn().mockResolvedValue({ count: 1 }),
+        },
+        webhookDelivery: { deleteMany: jest.fn().mockResolvedValue({ count: 3 }) },
+        idempotencyRecord: { deleteMany: jest.fn().mockResolvedValue({ count: 0 }) },
+        auditLog: sink.auditLog,
+      };
+      const prisma = {
+        $transaction: jest.fn((run: (client: typeof tx) => unknown) => run(tx)),
+      };
+      const service = new OrganizationLifecycleService(prisma as never);
+
+      switch (operation) {
+        case "archive":
+          return service.archive(ADMIN, ORGANIZATION_ID);
+        case "restore":
+          return service.restore(ADMIN, ORGANIZATION_ID);
+        case "placeLegalHold":
+          return service.placeLegalHold(ADMIN, ORGANIZATION_ID, "LEGAL-2026-001");
+        case "releaseLegalHold":
+          return service.releaseLegalHold(ADMIN, ORGANIZATION_ID);
+        default:
+          return service.deleteOrganization(ADMIN, ORGANIZATION_ID);
+      }
+    },
+  })),
   {
     event: "operator.payment_classification_updated",
     outcome: "success",
@@ -511,6 +714,7 @@ const scenarios: Scenario[] = [
         prisma as never,
         {} as never,
         configDouble({ paymentEncryptionKey: "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=" }),
+        {} as never,
       ).updateClassification({ id: USER_ID }, "payment_1", "INCOME" as never);
     },
   },
@@ -539,7 +743,7 @@ const scenarios: Scenario[] = [
         auditLog: sink.auditLog,
       };
 
-      return new TrustedSourcesService(prisma as never).createTrustedSource(
+      return new TrustedSourcesService(prisma as never, { reevaluateSource: jest.fn().mockResolvedValue(0) } as never).createTrustedSource(
         ADMIN,
         { sourceAddress: PAYER_ADDRESS, displayName: "Employer" } as never,
       );
@@ -574,7 +778,7 @@ const scenarios: Scenario[] = [
         auditLog: sink.auditLog,
       };
 
-      return new TrustedSourcesService(prisma as never).updateTrustedSource(
+      return new TrustedSourcesService(prisma as never, { reevaluateSource: jest.fn().mockResolvedValue(0) } as never).updateTrustedSource(
         ADMIN,
         "trusted_1",
         { displayName: "Main employer" } as never,
@@ -600,10 +804,158 @@ const scenarios: Scenario[] = [
         auditLog: sink.auditLog,
       };
 
-      return new TrustedSourcesService(prisma as never).deleteTrustedSource(
+      return new TrustedSourcesService(prisma as never, { reevaluateSource: jest.fn().mockResolvedValue(0) } as never).deleteTrustedSource(
         ADMIN,
         "trusted_1",
       );
+    },
+  },
+  {
+    event: "operator.user_status_changed",
+    outcome: "success",
+    name: "suspending an account",
+    run: (sink) => {
+      const tx = {
+        user: {
+          findUnique: jest.fn().mockResolvedValue({ status: "ACTIVE" }),
+          updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+          findUniqueOrThrow: jest.fn().mockResolvedValue({
+            id: "user_target",
+            displayName: null,
+            role: "WORKER",
+            status: "SUSPENDED",
+            createdAt: new Date(),
+            updatedAt: new Date(),
+            lastLoginAt: null,
+          }),
+        },
+        authSession: { updateMany: jest.fn().mockResolvedValue({ count: 2 }) },
+        auditLog: sink.auditLog,
+      };
+      const prisma = {
+        $transaction: jest.fn((run: (client: typeof tx) => unknown) => run(tx)),
+      };
+
+      return new UsersService(prisma as never).changeStatus(ADMIN, "user_target", {
+        status: "SUSPENDED",
+        reason: "SECURITY_INCIDENT",
+      } as never);
+    },
+  },
+  {
+    event: "operator.user_role_changed",
+    outcome: "success",
+    name: "changing an account's role",
+    run: (sink) => {
+      const tx = {
+        user: {
+          findUnique: jest
+            .fn()
+            .mockResolvedValue({ role: "WORKER", status: "ACTIVE" }),
+          updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+          findUniqueOrThrow: jest.fn().mockResolvedValue({
+            id: "user_target",
+            displayName: null,
+            role: "DEVELOPER",
+            status: "ACTIVE",
+            createdAt: new Date(),
+            updatedAt: new Date(),
+            lastLoginAt: null,
+          }),
+        },
+        organization: { count: jest.fn().mockResolvedValue(0) },
+        auditLog: sink.auditLog,
+      };
+      const prisma = {
+        $transaction: jest.fn((run: (client: typeof tx) => unknown) => run(tx)),
+      };
+
+      return new UsersService(prisma as never).changeRole(ADMIN, "user_target", {
+        role: "DEVELOPER",
+      } as never);
+    event: "operator.payment_backfill_requested",
+    outcome: "success",
+    name: "requesting a payment backfill",
+    run: (sink) => {
+      const job = {
+        id: "backfill_1",
+        userId: "user_target",
+        startLedger: 100,
+        endLedger: 200,
+        status: "PENDING",
+        checkpointCursor: null,
+        pagesProcessed: 0,
+        recordsSeen: 0,
+        paymentsCreated: 0,
+        duplicatesSkipped: 0,
+        attempts: 0,
+        cancelRequestedAt: null,
+        lastErrorSafe: null,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+        completedAt: null,
+      };
+      const prisma: Record<string, unknown> = {
+        $queryRaw: jest.fn().mockResolvedValue([{ id: "user_target" }]),
+        paymentBackfillJob: {
+          findFirst: jest.fn().mockResolvedValue(null),
+          create: jest.fn().mockResolvedValue(job),
+        },
+        auditLog: sink.auditLog,
+      };
+      prisma.$transaction = jest.fn((callback: (tx: unknown) => unknown) =>
+        callback(prisma),
+      );
+
+      return new PaymentBackfillService(
+        prisma as never,
+        {} as never,
+        configDouble({ paymentEncryptionKey: "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=" }),
+      ).createJob(ADMIN, { userId: "user_target", startLedger: 100, endLedger: 200 });
+    },
+  },
+  {
+    event: "operator.payment_backfill_cancelled",
+    outcome: "success",
+    name: "cancelling a payment backfill",
+    run: (sink) => {
+      const job = {
+        id: "backfill_1",
+        userId: "user_target",
+        startLedger: 100,
+        endLedger: 200,
+        status: "CANCELLED",
+        checkpointCursor: null,
+        pagesProcessed: 0,
+        recordsSeen: 0,
+        paymentsCreated: 0,
+        duplicatesSkipped: 0,
+        attempts: 0,
+        cancelRequestedAt: new Date(),
+        lastErrorSafe: null,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+        completedAt: new Date(),
+      };
+      const prisma: Record<string, unknown> = {
+        paymentBackfillJob: {
+          findUnique: jest
+            .fn()
+            .mockResolvedValue({ id: "backfill_1", status: "PENDING" }),
+          updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+          findUniqueOrThrow: jest.fn().mockResolvedValue(job),
+        },
+        auditLog: sink.auditLog,
+      };
+      prisma.$transaction = jest.fn((callback: (tx: unknown) => unknown) =>
+        callback(prisma),
+      );
+
+      return new PaymentBackfillService(
+        prisma as never,
+        {} as never,
+        configDouble({ paymentEncryptionKey: "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=" }),
+      ).cancelJob(ADMIN, "backfill_1");
     },
   },
   // ------------------------------------------------------ authentication ---
@@ -614,6 +966,7 @@ const scenarios: Scenario[] = [
       ["authentication.signature_invalid", AuthEventType.SIGNATURE_INVALID, "denied"],
       ["authentication.challenge_expired", AuthEventType.CHALLENGE_EXPIRED, "denied"],
       ["authentication.challenge_replayed", AuthEventType.CHALLENGE_REPLAYED, "denied"],
+      ["authentication.account_inactive", AuthEventType.ACCOUNT_INACTIVE, "denied"],
       ["authorization.rate_limited", AuthEventType.RATE_LIMITED, "denied"],
     ] as Array<[string, AuthEventType, AuditOutcome]>
   ).map(([event, eventType, outcome]): Scenario => ({

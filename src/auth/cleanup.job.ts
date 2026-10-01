@@ -54,6 +54,44 @@ export class CleanupJob {
     this.logger.log(`Removed ${deleted} old auth audit event(s)`);
   }
 
+  @Cron(
+    process.env.AUTH_WALLET_ROTATION_CLEANUP_CRON ??
+      CronExpression.EVERY_DAY_AT_2AM,
+  )
+  async deleteOldWalletRotations(): Promise<void> {
+    const deleted = await this.cleanupWalletRotations();
+    this.logger.log(`Removed ${deleted} old wallet rotation record(s)`);
+  }
+
+  /**
+   * Delete wallet rotations whose deadline passed more than the challenge
+   * retention window ago, whatever their outcome.
+   *
+   * A rotation row holds both wallet addresses in the clear; once the
+   * rotation can no longer be completed it is only evidence, and the durable
+   * evidence is the `user.wallet_rotated` audit record, which holds hashes.
+   *
+   * @returns Number of rotations deleted
+   */
+  async cleanupWalletRotations(now: Date = new Date()): Promise<number> {
+    try {
+      const cutoff = new Date(
+        now.getTime() - this.challengeRetentionDays * 24 * 60 * 60 * 1000,
+      );
+      const result = await this.prisma.walletRotation.deleteMany({
+        where: { expiresAt: { lt: cutoff } },
+      });
+      return result.count;
+    } catch (error) {
+      this.logger.error(
+        `Wallet rotation cleanup failed: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+      return 0;
+    }
+  }
+
   /**
    * Clean up expired and sufficiently old used challenges.
    *

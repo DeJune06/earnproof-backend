@@ -61,6 +61,7 @@ export const ALLOWED_METRIC_LABELS = {
     "/issuers",
     "/payments",
     "/proofs",
+    "/proof-shares",
     "/credentials",
     "/trusted-sources",
     "/api-keys",
@@ -90,6 +91,9 @@ export const ALLOWED_METRIC_LABELS = {
 
   /** Health verdict. */
   health: ["up", "down", "degraded"],
+
+  /** Organization operational quota. Names the quota, never the tenant. */
+  quota: ["api_keys", "webhooks", "proof_requests", "sync_frequency"],
 } as const;
 
 export type MetricLabelName = keyof typeof ALLOWED_METRIC_LABELS;

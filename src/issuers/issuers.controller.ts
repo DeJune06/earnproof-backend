@@ -15,6 +15,7 @@ import {
   ApiResponse,
 } from "@nestjs/swagger";
 import { CurrentUser } from "../common/decorators/current-user.decorator";
+import { AuthenticatedRoute } from "../common/decorators/authorization-policy.decorator";
 import { ApiErrorDto } from "../common/dto/api-error.dto";
 import { RequiredRole } from "../common/decorators/required-role.decorator";
 import { AuthGuard } from "../common/guards/auth.guard";
@@ -32,6 +33,7 @@ import { UpdateIssuerStatusDto } from "./dto/update-issuer-status.dto";
 import { IssuersService } from "./issuers.service";
 
 @ApiTags("issuers")
+@AuthenticatedRoute({ roles: ["ADMIN"] })
 @Controller("issuers")
 export class IssuersController {
   constructor(private readonly issuersService: IssuersService) {}

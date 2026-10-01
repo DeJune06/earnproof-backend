@@ -4,10 +4,15 @@ import {
   Delete,
   ForbiddenException,
   Get,
+  NotFoundException,
+  HttpCode,
   HttpStatus,
   Param,
+  HttpCode,
+  HttpStatus,
   Patch,
   Post,
+  Query,
   UseGuards,
 } from "@nestjs/common";
 import {
@@ -20,15 +25,25 @@ import {
   ApiTags,
   ApiUnauthorizedResponse,
 } from "@nestjs/swagger";
+import { SkipThrottle, Throttle } from "@nestjs/throttler";
 import { AuthenticatedUser } from "../auth/auth.types";
 import { CurrentUser } from "../common/decorators/current-user.decorator";
+import { AuthenticatedRoute } from "../common/decorators/authorization-policy.decorator";
 import { AuthGuard } from "../common/guards/auth.guard";
 import { PrismaService } from "../database/prisma.service";
 import { ApiErrorDto } from "../common/dto/api-error.dto";
 import { SESSION_AUTH_SCHEME } from "../common/swagger/security-schemes";
 import { CreateWebhookDto } from "./dto/create-webhook.dto";
+import {
+  ListDeadLettersQueryDto,
+  RedriveDeadLetterDto,
+  RedriveDeadLettersBatchDto,
+} from "./dto/dead-letter.dto";
 import { UpdateWebhookEventsDto } from "./dto/update-webhook-events.dto";
+import { UpdateWebhookCircuitConfigDto } from "./dto/webhook-circuit-config.dto";
+import { WebhookCircuitStatsDto } from "./dto/webhook-circuit-stats.dto";
 import { WebhooksService } from "./webhooks.service";
+import { WebhookCircuitBreakerService } from "./webhook-circuit-breaker.service";
 
 /**
  * Resolves the organisation ID from the current authenticated user.
@@ -38,6 +53,7 @@ import { WebhooksService } from "./webhooks.service";
  * as a path or query param — kept simple here per scope constraints.
  */
 @ApiTags("webhooks")
+@AuthenticatedRoute({ ownership: "user" })
 @ApiBearerAuth(SESSION_AUTH_SCHEME)
 @ApiUnauthorizedResponse({
   description: "Missing, invalid, or expired session token.",
@@ -54,8 +70,91 @@ import { WebhooksService } from "./webhooks.service";
 export class WebhooksController {
   constructor(
     private readonly webhooksService: WebhooksService,
+    private readonly circuitBreakerService: WebhookCircuitBreakerService,
     private readonly prisma: PrismaService,
   ) {}
+
+  // ---------------------------------------------------------------------------
+  // Dead letters (operator: DEVELOPER or ADMIN, own organisation only)
+  //
+  // Declared before the `:id` routes so `dead-letters` is never captured as a
+  // webhook id.
+  // ---------------------------------------------------------------------------
+
+  @Get("dead-letters")
+  @ApiOperation({
+    summary: "List dead-lettered deliveries for your organisation (DEVELOPER or ADMIN)",
+  })
+  async listDeadLetters(
+    @CurrentUser() user: AuthenticatedUser,
+    @Query() query: ListDeadLettersQueryDto,
+  ) {
+    this.requirePrivilegedRole(user);
+    const orgId = await this.requireOrgId(user);
+    return this.deadLetters.list(orgId, query);
+  }
+
+  @Post("dead-letters/redrive")
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: "Redrive a bounded batch of dead-lettered deliveries (DEVELOPER or ADMIN)",
+    description:
+      "Each item is redriven independently and reported with a stable outcome code. " +
+      "An operator reason is required and audited.",
+  })
+  async redriveDeadLetters(
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() body: RedriveDeadLettersBatchDto,
+  ) {
+    this.requirePrivilegedRole(user);
+    const orgId = await this.requireOrgId(user);
+    return this.deadLetters.redriveBatch(
+      orgId,
+      body.deliveryIds,
+      user.id,
+      body.reason,
+    );
+  }
+
+  @Get("dead-letters/:deliveryId")
+  @ApiOperation({
+    summary: "Inspect a dead-lettered delivery and its attempt history (DEVELOPER or ADMIN)",
+  })
+  async getDeadLetter(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param("deliveryId") deliveryId: string,
+  ) {
+    this.requirePrivilegedRole(user);
+    const orgId = await this.requireOrgId(user);
+    return this.deadLetters.get(orgId, deliveryId);
+  }
+
+  @Post("dead-letters/:deliveryId/redrive")
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: "Redrive one dead-lettered delivery (DEVELOPER or ADMIN)",
+    description:
+      "Creates a new delivery carrying the original event id and payload bytes. " +
+      "Idempotent: a second redrive of the same dead letter returns the first one.",
+  })
+  async redriveDeadLetter(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param("deliveryId") deliveryId: string,
+    @Body() body: RedriveDeadLetterDto,
+  ) {
+    this.requirePrivilegedRole(user);
+    const orgId = await this.requireOrgId(user);
+    const result = await this.deadLetters.redrive(
+      orgId,
+      deliveryId,
+      user.id,
+      body.reason,
+    );
+    if (result.outcome === "not_found") {
+      throw new NotFoundException("Dead-lettered delivery not found");
+    }
+    return result;
+  }
 
   // ---------------------------------------------------------------------------
   // Endpoint management
@@ -377,6 +476,74 @@ export class WebhooksController {
   }
 
   // ---------------------------------------------------------------------------
+  // Circuit breaker management
+  // ---------------------------------------------------------------------------
+
+  @Get(":id/circuit")
+  @ApiOperation({
+    summary: "Get webhook circuit breaker statistics",
+    description: "Returns current circuit state and failure statistics for monitoring.",
+  })
+  @ApiParam({
+    name: "id",
+    description: "Webhook endpoint identifier.",
+    example: "ckv8v6h2b0002qzrm7t4k9xza",
+  })
+  @ApiResponse({
+    status: HttpStatus.OK,
+    description: "Circuit breaker statistics.",
+    type: WebhookCircuitStatsDto,
+  })
+  @ApiNotFoundResponse({
+    description: "No such endpoint in the caller's organisation.",
+    type: ApiErrorDto,
+  })
+  async getCircuitStats(@CurrentUser() user: AuthenticatedUser, @Param("id") id: string) {
+    const orgId = await this.requireOrgId(user);
+    // Verify webhook ownership
+    await this.webhooksService.getForOrg(orgId, id);
+    
+    const stats = await this.circuitBreakerService.getCircuitStats(id);
+    if (!stats) {
+      // Initialize circuit if it doesn't exist
+      await this.circuitBreakerService.initializeCircuit(id);
+      return await this.circuitBreakerService.getCircuitStats(id);
+    }
+    return stats;
+  }
+
+  @Patch(":id/circuit")
+  @ApiOperation({
+    summary: "Update webhook circuit breaker configuration",
+    description: "Configure failure threshold and recovery window for circuit breaker.",
+  })
+  @ApiParam({
+    name: "id",
+    description: "Webhook endpoint identifier.",
+    example: "ckv8v6h2b0002qzrm7t4k9xza",
+  })
+  @ApiResponse({
+    status: HttpStatus.OK,
+    description: "Circuit breaker configuration updated.",
+  })
+  @ApiNotFoundResponse({
+    description: "No such endpoint in the caller's organisation.",
+    type: ApiErrorDto,
+  })
+  async updateCircuitConfig(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param("id") id: string,
+    @Body() config: UpdateWebhookCircuitConfigDto,
+  ) {
+    const orgId = await this.requireOrgId(user);
+    // Verify webhook ownership
+    await this.webhooksService.getForOrg(orgId, id);
+    
+    await this.circuitBreakerService.updateConfig(id, config);
+    return { success: true };
+  }
+
+  // ---------------------------------------------------------------------------
   // Manual replay
   // ---------------------------------------------------------------------------
 
@@ -427,6 +594,67 @@ export class WebhooksController {
   }
 
   // ---------------------------------------------------------------------------
+  // Synthetic test delivery
+  // ---------------------------------------------------------------------------
+
+  @Post(":id/test")
+  @HttpCode(HttpStatus.OK)
+  // Same limiter as other expensive, outbound-triggering operations: each call
+  // makes a synchronous HTTP request to a caller-chosen destination.
+  @SkipThrottle({ default: true, verification: true })
+  @Throttle({ strict: {} })
+  @ApiOperation({
+    summary: "Send a synthetic test event (DEVELOPER or ADMIN only)",
+    description:
+      "Signs a versioned synthetic `webhook.test` event with the endpoint's " +
+      "current secret through the production signing path and POSTs it once, " +
+      "under the same destination policy, no-redirect rule, and timeout as a " +
+      "real delivery. The event is marked `synthetic: true`, its id is prefixed " +
+      "`test_`, and it is never stored as a delivery or retried. Returns the " +
+      "delivery timing, a status class, and the receiver response, redacted and " +
+      "bounded exactly as stored delivery responses are. A non-2xx receiver " +
+      "answer is reported in the body, not as an error status.",
+  })
+  @ApiParam({
+    name: "id",
+    description: "Webhook endpoint identifier.",
+    example: "ckv8v6h2b0002qzrm7t4k9xza",
+  })
+  @ApiResponse({
+    status: HttpStatus.OK,
+    description: "Test delivery attempted; see `statusClass` for the outcome.",
+    type: WebhookTestDeliveryResponseDto,
+  })
+  @ApiResponse({
+    status: HttpStatus.BAD_REQUEST,
+    description: "The endpoint is disabled.",
+    type: ApiErrorDto,
+  })
+  @ApiForbiddenResponse({
+    description:
+      "The caller is not a DEVELOPER or ADMIN, or the endpoint belongs to " +
+      "another organisation.",
+    type: ApiErrorDto,
+  })
+  @ApiNotFoundResponse({
+    description: "No such endpoint.",
+    type: ApiErrorDto,
+  })
+  @ApiResponse({
+    status: HttpStatus.TOO_MANY_REQUESTS,
+    description: "Rate limit exceeded (strict limiter).",
+    type: ApiErrorDto,
+  })
+  async sendTestDelivery(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param("id") id: string,
+  ): Promise<WebhookTestDeliveryResponseDto> {
+    this.requirePrivilegedRole(user, "send webhook test deliveries");
+    const orgId = await this.requireOrgId(user);
+    return this.webhooksService.sendTestDelivery(orgId, id);
+  }
+
+  // ---------------------------------------------------------------------------
   // Internal helpers
   // ---------------------------------------------------------------------------
 
@@ -436,7 +664,7 @@ export class WebhooksController {
       where: { id: user.id },
       select: {
         organizations: {
-          where: { status: "ACTIVE" },
+          where: { status: "ACTIVE", archivedAt: null },
           select: { id: true },
           take: 1,
         },
@@ -450,10 +678,14 @@ export class WebhooksController {
     return userWithOrgs.organizations[0].id;
   }
 
-  private requirePrivilegedRole(user: AuthenticatedUser): void {
+  private requirePrivilegedRole(
+    user: AuthenticatedUser,
+    action = "replay webhook deliveries",
+  ): void {
     if (user.role !== "DEVELOPER" && user.role !== "ADMIN") {
       throw new ForbiddenException(
-        "Only DEVELOPER or ADMIN users may replay webhook deliveries",
+        "Only DEVELOPER or ADMIN users may inspect, replay, or redrive webhook deliveries",
+        `Only DEVELOPER or ADMIN users may ${action}`,
       );
     }
   }

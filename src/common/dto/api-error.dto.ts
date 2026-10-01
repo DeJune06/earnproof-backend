@@ -39,15 +39,42 @@ export enum ApiErrorCode {
   // 422 - payment cannot be used for the requested proof
   PAYMENT_NOT_ELIGIBLE = "PAYMENT_NOT_ELIGIBLE",
   PAYMENT_EXCLUDED = "PAYMENT_EXCLUDED",
+  PAYMENT_AMBIGUOUS_MATCH = "PAYMENT_AMBIGUOUS_MATCH",
+  ASSET_NOT_SUPPORTED = "ASSET_NOT_SUPPORTED",
+
+  // 422 - proof cannot be shared in its current state
+  PROOF_NOT_SHAREABLE = "PROOF_NOT_SHAREABLE",
+
+  // 422 - an aggregate-earnings proof cannot be issued under its policy
+  AGGREGATION_CROSS_ASSET_UNSUPPORTED = "AGGREGATION_CROSS_ASSET_UNSUPPORTED",
+  AGGREGATION_INSUFFICIENT_PAYMENTS = "AGGREGATION_INSUFFICIENT_PAYMENTS",
+  AGGREGATION_LIMIT_EXCEEDED = "AGGREGATION_LIMIT_EXCEEDED",
+
+  // 422 - employer-payment proof cannot be issued from the selected source
+  EMPLOYER_SOURCE_UNTRUSTED = "EMPLOYER_SOURCE_UNTRUSTED",
+  EMPLOYER_SOURCE_AMBIGUOUS = "EMPLOYER_SOURCE_AMBIGUOUS",
+  EMPLOYER_PAYMENT_NOT_FOUND = "EMPLOYER_PAYMENT_NOT_FOUND",
+
+  // 422 - employment-continuity rule is not met or cannot be evaluated
+  CONTINUITY_NOT_SATISFIED = "CONTINUITY_NOT_SATISFIED",
+  CONTINUITY_LIMIT_EXCEEDED = "CONTINUITY_LIMIT_EXCEEDED",
 
   // 409 – request conflicts with current state
   CONFLICT = "CONFLICT",
+  PAYMENT_ALREADY_SETTLED = "PAYMENT_ALREADY_SETTLED",
+  INVOICE_REFERENCE_CONFLICT = "INVOICE_REFERENCE_CONFLICT",
 
+  // 429 – rate limiting (short-window request throttling)
   // 413 – the request exceeded a transport or structural limit
   PAYLOAD_TOO_LARGE = "PAYLOAD_TOO_LARGE",
 
   // 429 – rate limiting
   TOO_MANY_REQUESTS = "TOO_MANY_REQUESTS",
+
+  // 429 – an organization operational quota is exhausted. Distinct from
+  // TOO_MANY_REQUESTS: retrying immediately will not succeed; the quota
+  // resets at the window boundary or when usage is reduced.
+  QUOTA_EXCEEDED = "QUOTA_EXCEEDED",
 
   // 503 – a required dependency is unavailable
   DEPENDENCY_UNAVAILABLE = "DEPENDENCY_UNAVAILABLE",
@@ -72,50 +99,57 @@ export class FieldViolationDto {
   message!: string;
 }
 
-/**
- * The standard error envelope returned for all non-2xx responses.
- *
- * @example
- * {
- *   "statusCode": 401,
- *   "code": "INVALID_TOKEN",
- *   "message": "Authentication token is invalid.",
- *   "requestId": "01hwzxyz..."
- * }
- */
-export class ApiErrorDto {
-  @ApiProperty({
-    description: "HTTP status code.",
-    example: 401,
-  })
-  statusCode!: number;
+  /**
+   * The standard error envelope returned for all non-2xx responses.
+   *
+   * @example
+   * {
+   *   "statusCode": 401,
+   *   "code": "INVALID_TOKEN",
+   *   "message": "Authentication token is invalid.",
+   *   "requestId": "01hwzxyz..."
+   * }
+   */
+  export class ApiErrorDto {
+    @ApiProperty({
+      description: "HTTP status code.",
+      example: 401,
+    })
+    statusCode!: number;
 
-  @ApiProperty({
-    description:
-      "Stable machine-readable error code. Clients should branch on this, not on `message`.",
-    enum: ApiErrorCode,
-    example: ApiErrorCode.INVALID_TOKEN,
-  })
-  code!: ApiErrorCode;
+    @ApiProperty({
+      description:
+        "Stable machine-readable error code. Clients should branch on this, not on `message`.",
+      enum: ApiErrorCode,
+      example: ApiErrorCode.INVALID_TOKEN,
+    })
+    code!: ApiErrorCode;
 
-  @ApiProperty({
-    description:
-      "Human-readable error description. May change across releases; do not parse.",
-    example: "Authentication token is invalid.",
-  })
-  message!: string;
+    @ApiProperty({
+      description:
+        "Human-readable error description. May change across releases; do not parse.",
+      example: "Authentication token is invalid.",
+    })
+    message!: string;
 
-  @ApiProperty({
-    description:
-      "Unique identifier for this request. Include this in bug reports and support tickets.",
-    example: "01hwzxyz1234abcd",
-  })
-  requestId!: string;
+    @ApiProperty({
+      description:
+        "Unique identifier for this request. Include this in bug reports and support tickets.",
+      example: "01hwzxyz1234abcd",
+    })
+    requestId!: string;
 
-  @ApiPropertyOptional({
-    description:
-      "Present only on 422 validation errors. Lists each field that failed.",
-    type: [FieldViolationDto],
-  })
-  violations?: FieldViolationDto[];
-}
+    @ApiPropertyOptional({
+      description:
+        "Present only on 422 validation errors. Lists each field that failed.",
+      type: [FieldViolationDto],
+    })
+    violations?: FieldViolationDto[];
+
+    @ApiPropertyOptional({
+      description:
+        "Present only on 409 conflict errors. Current revision of the resource.",
+      example: 5,
+    })
+    currentRevision?: number;
+  }

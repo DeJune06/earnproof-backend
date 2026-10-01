@@ -43,6 +43,9 @@ export const METRIC_NAMES = {
   jobRunsTotal: "job_runs_total",
   jobDurationMs: "job_duration_ms",
   jobRecordsAffectedTotal: "job_records_affected_total",
+
+  // ─── Organization quotas ────────────────────────────────────────────────
+  quotaRejectionsTotal: "quota_rejections_total",
 } as const;
 
 /**
@@ -169,5 +172,15 @@ export function registerCoreMetrics(registry: MetricsRegistry): void {
     name: METRIC_NAMES.jobRecordsAffectedTotal,
     help: "Records affected by a scheduled job. A count only; never record content.",
     labelNames: ["job", "workflow"],
+  });
+
+  // ─── Organization quotas ────────────────────────────────────────────────
+  // Separate from http_requests_total so a quota rejection is never mistaken
+  // for throttling: both answer 429, only this counter names the quota.
+  // Labelled by quota, never by organization — that would scale with tenants.
+  registry.registerCounter({
+    name: METRIC_NAMES.quotaRejectionsTotal,
+    help: "Operations rejected because an organization quota was exhausted, by quota.",
+    labelNames: ["quota"],
   });
 }

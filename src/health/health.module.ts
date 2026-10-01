@@ -1,5 +1,6 @@
-import { Module } from "@nestjs/common";
+﻿import { Module } from "@nestjs/common";
 import { ApiKeysModule } from "../api-keys/api-keys.module";
+import { DeploymentMetadataService } from "./deployment-metadata.service";
 import { HealthController } from "./health.controller";
 import { HealthService } from "./health.service";
 
@@ -12,7 +13,7 @@ import { HealthService } from "./health.service";
 @Module({
   imports: [ApiKeysModule],
   controllers: [HealthController],
-  providers: [HealthService],
+  providers: [HealthService, DeploymentMetadataService],
   exports: [HealthService],
 })
 export class HealthModule {}

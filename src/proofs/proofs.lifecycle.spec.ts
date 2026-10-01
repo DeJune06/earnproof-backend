@@ -6,6 +6,8 @@ import {
 } from "@prisma/client";
 import { ProofsService } from "./proofs.service";
 import { VerificationEventService } from "../audit/verification-event.service";
+import { unlimitedQuotas } from "../testing/quotas";
+import { AttestationsService } from "../attestations/attestations.service";
 
 describe("ProofsService lifecycle", () => {
   it("creates, verifies, revokes, and re-verifies a minimum income proof", async () => {
@@ -26,6 +28,27 @@ describe("ProofsService lifecycle", () => {
       getOrThrow: jest.fn((key: string) => configValues[key]),
       get: jest.fn((key: string) => configValues[key]),
     } as never, mockVerificationEventService);
+    const mockAttestationsService = {
+      getValidAttestationsForSubject: jest.fn().mockResolvedValue([]),
+    } as unknown as AttestationsService;
+    const service = new ProofsService(store.prisma as never, {
+      getOrThrow: jest.fn((key: string) => {
+        const values: Record<string, string> = {
+          credentialSigningSecret: "lifecycle-signing-secret",
+          paymentEncryptionKey: "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=",
+          "stellar.network": "testnet",
+        };
+        return values[key];
+      }),
+      get: jest.fn((key: string) => {
+        const values: Record<string, boolean | undefined> = {
+          "contractAnchoring.enabled": false,
+          "contractAnchoring.required": false,
+        };
+        return values[key];
+      }),
+    } as never, mockVerificationEventService, unlimitedQuotas() as never);
+    } as never, mockVerificationEventService, mockAttestationsService);
     const user = {
       id: "user_lifecycle",
       walletAddress: "GB_TEST",
@@ -65,6 +88,7 @@ describe("ProofsService lifecycle", () => {
     ["ineligible", { isEligible: false }, "eligible income"],
     ["mixed asset", { assetCode: "USDC" }, "requested asset"],
     ["non-owned", { userId: "another_user" }, "invalid"],
+    ["ledger-held", { finalityHoldAt: new Date("2026-07-01T00:00:00.000Z") }, "pending ledger reconciliation"],
   ])("rejects a %s selected payment", async (_case, change, message) => {
     const store = createRecurringProofStore();
     Object.assign(store.payments[1], change);
@@ -128,6 +152,9 @@ function createRecurringService(store: ReturnType<typeof createRecurringProofSto
     paymentEncryptionKey: "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=",
     "stellar.network": "testnet",
   };
+  const mockAttestationsService = {
+    getValidAttestationsForSubject: jest.fn().mockResolvedValue([]),
+  } as unknown as AttestationsService;
   return new ProofsService(
     store.prisma as never,
     {
@@ -135,6 +162,8 @@ function createRecurringService(store: ReturnType<typeof createRecurringProofSto
       get: jest.fn((key: string) => (key in configValues ? configValues[key] : false)),
     } as never,
     { recordEvent: jest.fn().mockResolvedValue(undefined) } as never,
+    unlimitedQuotas() as never,
+    mockAttestationsService,
   );
 }
 
@@ -215,6 +244,18 @@ function createProofStore() {
     // $transaction is used by createMinimumIncomeProof and revokeProof.
     $transaction: jest.fn().mockImplementation(async (fn: (tx: unknown) => unknown) => {
       const tx = {
+        supportedAsset: {
+          findFirst: jest.fn().mockResolvedValue({
+            id: "asset_lifecycle",
+            assetKey: "testnet:native:XLM",
+            code: "XLM",
+            issuer: null,
+            network: "testnet",
+            status: "ACTIVE",
+            createdAt: new Date("2026-01-01T00:00:00.000Z"),
+            updatedAt: new Date("2026-01-01T00:00:00.000Z"),
+          }),
+        },
         proof: {
           create: jest.fn(({ data }) => {
             const proof = {
@@ -282,6 +323,21 @@ describe("ProofsService lifecycle – recurring-income", () => {
       getOrThrow: jest.fn((key: string) => riConfigValues[key]),
       get: jest.fn((key: string) => (key in riConfigValues ? riConfigValues[key] : false)),
     } as never, mockVerificationEventService);
+    const mockAttestationsService = {
+      getValidAttestationsForSubject: jest.fn().mockResolvedValue([]),
+    } as unknown as AttestationsService;
+    const service = new ProofsService(store.prisma as never, {
+      getOrThrow: jest.fn((key: string) => {
+        const values: Record<string, string> = {
+          credentialSigningSecret: "lifecycle-signing-secret",
+          paymentEncryptionKey: "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=",
+          "stellar.network": "testnet",
+        };
+        return values[key];
+      }),
+      get: jest.fn(() => false),
+    } as never, mockVerificationEventService, unlimitedQuotas() as never);
+    } as never, mockVerificationEventService, mockAttestationsService);
     const user = {
       id: "user_ri_lifecycle",
       walletAddress: "GB_TEST",
@@ -380,6 +436,18 @@ function createRecurringProofStore() {
     prisma: {
       $transaction: jest.fn(async (callback) =>
         callback({
+          supportedAsset: {
+            findFirst: jest.fn().mockResolvedValue({
+              id: "asset_ri_lifecycle",
+              assetKey: "testnet:native:XLM",
+              code: "XLM",
+              issuer: null,
+              network: "testnet",
+              status: "ACTIVE",
+              createdAt: new Date("2026-01-01T00:00:00.000Z"),
+              updatedAt: new Date("2026-01-01T00:00:00.000Z"),
+            }),
+          },
           proof: {
             create: jest.fn(({ data }) => {
               const proof = {

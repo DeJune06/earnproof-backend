@@ -36,6 +36,9 @@ function makeAnchoring(result: unknown = { anchored: true, transactionHash: "tx_
   return {
     anchorProof: jest.fn().mockResolvedValue(result),
     revokeProof: jest.fn().mockResolvedValue(result),
+    // Backpressure consults the dependency circuit before claiming; a closed
+    // circuit is the default so existing behaviour is unchanged.
+    circuitState: jest.fn().mockReturnValue("closed"),
   };
 }
 

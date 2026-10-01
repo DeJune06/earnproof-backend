@@ -1,9 +1,20 @@
+import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
 import { ApiProperty } from "@nestjs/swagger";
 import {
   ArrayMaxSize,
   ArrayMinSize,
   IsArray,
   IsIn,
+  IsOptional,
+  IsUrl,
+} from "class-validator";
+import {
+  CURRENT_WEBHOOK_PAYLOAD_VERSION,
+  WEBHOOK_EVENT_TYPES,
+  WEBHOOK_PAYLOAD_VERSIONS,
+  WebhookEventType,
+  WebhookPayloadVersion,
+} from "../webhook-event.types";
   IsUrl,
   MaxLength,
 } from "class-validator";
@@ -32,4 +43,15 @@ export class CreateWebhookDto {
   @ArrayMaxSize(WEBHOOK_EVENT_TYPES.length)
   @IsIn(WEBHOOK_EVENT_TYPES as unknown as string[], { each: true })
   events!: WebhookEventType[];
+
+  @ApiPropertyOptional({
+    description:
+      "Payload schema version to pin this endpoint to. Defaults to the current version. " +
+      "Pinned endpoints keep receiving this version until they opt in to a newer one.",
+    enum: WEBHOOK_PAYLOAD_VERSIONS,
+    default: CURRENT_WEBHOOK_PAYLOAD_VERSION,
+  })
+  @IsOptional()
+  @IsIn(WEBHOOK_PAYLOAD_VERSIONS as unknown as string[])
+  payloadVersion?: WebhookPayloadVersion;
 }

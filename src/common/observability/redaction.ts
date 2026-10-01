@@ -205,6 +205,13 @@ export interface LogContext {
 const FORBIDDEN_LOG_FIELDS = new Set<string>([
   "walletAddress",
   "wallet",
+  // Payment account addresses, and their protected forms: ciphertext and
+  // lookup tokens are stable per address, so logging them links records.
+  "sourceAddress",
+  "destinationAddress",
+  "sourceAddressEncrypted",
+  "destinationAddressEncrypted",
+  "sourceAddressLookup",
   "proofId",
   "credentialHash",
   "commitment",

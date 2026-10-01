@@ -20,6 +20,7 @@ interface Row {
 class FakeDelegate {
   rows: Row[];
   readonly takes: number[] = [];
+  readonly findCalls: Array<Record<string, unknown>> = [];
   deleteCalls = 0;
   /** Invoked before each deleteMany, to simulate interruption or concurrency. */
   onDelete?: (ids: string[]) => void;
@@ -50,26 +51,38 @@ class FakeDelegate {
 
   async findMany({
     where,
+    select,
     orderBy,
     take,
+    skip = 0,
   }: {
     where: Record<string, unknown>;
-    select: { id: true };
-    orderBy: Record<string, "asc" | "desc">;
+    select: Record<string, unknown>;
+    orderBy: Array<Record<string, "asc" | "desc">>;
     take: number;
-  }): Promise<Array<{ id: string }>> {
+    skip?: number;
+  }): Promise<Array<Record<string, unknown>>> {
     this.takes.push(take);
+    this.findCalls.push({ where, select, orderBy, take, skip });
 
-    const column = Object.keys(orderBy)[0];
+    const column = Object.keys(orderBy[0])[0];
     return this.rows
       .filter((row) => this.matches(row, where))
       .sort((a, b) => {
         const left = a[column] as Date;
         const right = b[column] as Date;
-        return left.getTime() - right.getTime();
+        // Mirrors the service's `id` tiebreaker, so paging is total.
+        return left.getTime() - right.getTime() || a.id.localeCompare(b.id);
       })
-      .slice(0, take)
-      .map((row) => ({ id: row.id }));
+      .slice(skip, skip + take)
+      // Projects only the selected columns, as Prisma would.
+      .map((row) =>
+        Object.fromEntries(
+          Object.keys(select)
+            .filter((key) => key in row)
+            .map((key) => [key, row[key]]),
+        ),
+      );
   }
 
   async deleteMany({
@@ -488,7 +501,7 @@ describe("RetentionCleanupService", () => {
 
       const result = await service.run({ now: NOW });
 
-      expect(result.results).toHaveLength(6);
+      expect(result.results).toHaveLength(7);
       expect(result.totalAffected).toBe(4);
     });
   });

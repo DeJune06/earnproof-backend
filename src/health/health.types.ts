@@ -66,6 +66,25 @@ export interface DependencyResult {
   cached?: boolean;
   /** Age of a cached result, in milliseconds. */
   ageMs?: number;
+  /**
+   * Per-circuit state, present only on the circuit-breaker dependency.
+   *
+   * Deliberately typed as counts-and-state records: it carries circuit names
+   * and numbers, never a transaction payload, an address, or an error body, so
+   * it is safe to render in the authorized diagnostics response.
+   */
+  circuits?: CircuitDiagnostic[];
+}
+
+/** Privacy-safe view of one circuit for the diagnostics endpoint. */
+export interface CircuitDiagnostic {
+  name: string;
+  state: "closed" | "open" | "half_open";
+  consecutiveFailures: number;
+  probeSuccesses: number;
+  probesInFlight: number;
+  openCount: number;
+  cooldownRemainingMs: number;
 }
 
 /** Aggregate readiness verdict. */

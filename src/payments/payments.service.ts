@@ -6,33 +6,82 @@ import {
   Prisma,
   ResourceStatus,
 } from "@prisma/client";
+import { canonicalAssetId } from "../common/assets/asset-identifier";
+import { encryptProtectedAmount } from "../common/crypto/protected-amount";
 import { PaymentEncryptionKeyringService } from "../common/crypto/payment-encryption-keyring.service";
 import { PrismaService } from "../database/prisma.service";
+import { OrganizationQuotaService } from "../quotas/organization-quota.service";
 import { StellarService } from "../stellar/stellar.service";
-import { normalizeMemo } from "../stellar/memo-normalizer";
+import { normalizeMemoDetailed } from "../stellar/memo-normalizer";
 import { NormalizedMemo } from "../stellar/stellar.types";
+import { StoredMemo, decodeStoredMemo, encodeStoredMemo } from "./payment-memo";
+import { normalizeMemo } from "../stellar/memo-normalizer";
+import { ledgerSequenceFromPagingToken } from "../stellar/ledger-finality";
+import { NormalizedMemo, NormalizedPayment } from "../stellar/stellar.types";
+import {
+  FinalityOutcome,
+  PaymentFinalityService,
+} from "./payment-finality.service";
+
+/**
+ * A plan is re-read at most once per sync: when a forward read diverges, the
+ * same call switches to reconciliation and reads again. A second divergence is
+ * left for the next sync rather than looping against an inconsistent Horizon.
+ */
+const MAX_READS_PER_SYNC = 2;
+import { operationIndexFromToid } from "../stellar/operation-identity";
+import { NormalizedMemo } from "../stellar/stellar.types";
+import { PaymentEligibilityService } from "./payment-eligibility.service";
+import { PaymentClassificationHistoryService } from "./payment-classification-history.service";
 
 @Injectable()
 export class PaymentsService {
+  private readonly paymentEncryptionKey: string;
+  private readonly stellarNetwork: string;
   private readonly paymentEncryptionKeyring: PaymentEncryptionKeyringService;
 
   constructor(
     private readonly prisma: PrismaService,
     private readonly stellarService: StellarService,
     configService: ConfigService,
+    private readonly finality: PaymentFinalityService,
+    private readonly configService: ConfigService,
+    private readonly classificationHistoryService: PaymentClassificationHistoryService,
   ) {
     this.paymentEncryptionKeyring = new PaymentEncryptionKeyringService(
       configService,
     );
+    this.stellarNetwork = configService.getOrThrow<string>("stellar.network");
   }
 
+  /**
+   * Synchronises incoming payments behind the wallet's ledger checkpoint.
+   *
+   * The checkpoint is re-proved against Horizon before any page is read, and
+   * every read is inspected before any row is written. A read that contradicts
+   * the verified view writes nothing: the affected payments are held from proof
+   * issuance and a bounded reconciliation decides what survives. See
+   * docs/ledger-finality.md.
+   */
   async syncPayments(user: { id: string; walletAddress: string }) {
+    let plan = await this.finality.plan(user.id);
+    // Resolved here rather than in the constructor: the network stamps every
+    // synced payment's canonical identity, but classification-only call paths
+    // never touch it, so requiring it at construction would over-couple them.
+    const network = this.configService.getOrThrow<string>("stellar.network");
     const incomingPayments = await this.stellarService.fetchIncomingPayments(
       user.walletAddress,
     );
+    // Eligibility is governed by the active asset definition for THIS
+    // deployment's network. Without the network filter, a SupportedAsset row
+    // seeded for a different network (e.g. mainnet) with the same code/issuer
+    // as a testnet row - which happens for the native asset, since it has no
+    // issuer to disambiguate networks - could make a payment eligible based
+    // on the wrong network's policy.
     const supportedAssets = await this.prisma.supportedAsset.findMany({
       where: {
         status: ResourceStatus.ACTIVE,
+        network: this.stellarNetwork,
       },
       select: {
         code: true,
@@ -41,37 +90,96 @@ export class PaymentsService {
       },
     });
     const supportedAssetKeys = new Set(
-      supportedAssets.map((asset) => this.assetKey(asset.code, asset.issuer)),
+      supportedAssets.map((asset) =>
+        canonicalAssetId({
+          network: asset.network,
+          code: asset.code,
+          issuer: asset.issuer,
+        }),
+      ),
     );
 
+    for (let reads = 1; ; reads += 1) {
+      const read = await this.stellarService.readIncomingPayments(
+        user.walletAddress,
+        this.finality.readOptions(plan),
+      );
+      const incomingPayments = read.payments;
+
+      // Batch the "does this payment already exist" check into a single query
+      // ahead of the loop, instead of one findUnique per incoming payment.
+      // incomingPayments comes from Stellar Horizon and can run into the
+      // hundreds for an active wallet; a query per row turned a sync into N+1
+      // round trips to the database on top of the (already-batched) N calls to
+      // Horizon for memo enrichment.
+      const stored = new Map(
+        (
+          await this.prisma.payment.findMany({
+            where: {
+              operationId: {
+                in: incomingPayments.map((payment) => payment.operationId),
+              },
+            },
+            select: { operationId: true, stellarTransactionHash: true, userId: true },
+          })
+        ).map((row) => [
+          row.operationId,
+          { transactionHash: row.stellarTransactionHash, userId: row.userId },
+        ]),
+      );
+
+      const divergence = this.finality.inspect(plan, read, stored, user.id);
+      if (divergence) {
+        if (plan.mode === "resume" && reads < MAX_READS_PER_SYNC) {
+          plan = await this.finality.diverge(user.id, plan.checkpoint, divergence);
+          continue;
+        }
+        return this.syncResult(
+          incomingPayments.length,
+          { created: 0, updated: 0, skipped: 0, enrichmentErrors: 0 },
+          await this.finality.diverged(user.id, divergence),
+        );
+      }
+
+      const counts = await this.writePayments(
+        user.id,
+        incomingPayments,
+        stored,
+        this.finality.replacements(read, stored, user.id),
+        supportedAssetKeys,
+      );
+      const finality = await this.finality.settle(user.id, plan, read, counts);
+      return this.syncResult(incomingPayments.length, counts, finality);
+    }
+  }
+
+  private async writePayments(
+    userId: string,
+    incomingPayments: NormalizedPayment[],
+    stored: ReadonlyMap<string, unknown>,
+    replaced: ReadonlySet<string>,
+    supportedAssetKeys: ReadonlySet<string>,
+  ) {
     let created = 0;
     let updated = 0;
     let skipped = 0;
+    let rewritten = 0;
     let enrichmentErrors = 0;
+    // Keyed by transaction: every operation in a transaction shares its memo,
+    // and caching the encoded form keeps the stored value identical for all
+    // of them.
+    const memoCache = new Map<string, StoredMemo>();
+    let conflicts = 0;
     const memoCache = new Map<string, NormalizedMemo>();
-
-    // Batch the "does this payment already exist" check into a single query
-    // ahead of the loop, instead of one findUnique per incoming payment.
-    // incomingPayments comes from Stellar Horizon and can run into the
-    // hundreds for an active wallet; a query per row turned a sync into N+1
-    // round trips to the database on top of the (already-batched) N calls to
-    // Horizon for memo enrichment.
-    const existingOperationIds = new Set(
-      (
-        await this.prisma.payment.findMany({
-          where: {
-            operationId: {
-              in: incomingPayments.map((payment) => payment.operationId),
-            },
-          },
-          select: { operationId: true },
-        })
-      ).map((row) => row.operationId),
-    );
+    const syncedPaymentIds: string[] = [];
 
     for (const payment of incomingPayments) {
       const isEligible = supportedAssetKeys.has(
-        this.assetKey(payment.assetCode, payment.assetIssuer),
+        canonicalAssetId({
+          network: this.stellarNetwork,
+          code: payment.assetCode,
+          issuer: payment.assetIssuer,
+        }),
       );
 
       if (!isEligible) {
@@ -87,41 +195,123 @@ export class PaymentsService {
           if (!transaction) {
             enrichmentErrors += 1;
           }
-          memoContext = normalizeMemo(transaction);
+          memoContext = encodeStoredMemo(
+            normalizeMemoDetailed(transaction),
+            this.paymentEncryptionKeyring,
+          );
         } catch {
           enrichmentErrors += 1;
-          memoContext = { type: "none" };
+          memoContext = encodeStoredMemo(
+            { memo: { type: "none" } },
+            this.paymentEncryptionKeyring,
+          );
         }
         memoCache.set(payment.stellarTransactionHash, memoContext);
       }
 
-      const existing = existingOperationIds.has(payment.operationId);
+      const existing = stored.has(payment.operationId);
+      const ledgerContext = {
+        pagingToken: payment.pagingToken ?? null,
+        ledgerSequence: ledgerSequenceFromPagingToken(payment.pagingToken),
+        // Written only from a read that passed finality inspection, so the
+        // record is confirmed by a consistent view and any hold is lifted.
+        finalityHoldAt: null,
+        finalityHoldReason: null,
+      };
+      const content = {
+        userId,
+        stellarTransactionHash: payment.stellarTransactionHash,
+        sourceAddress: payment.sourceAddress,
+        destinationAddress: payment.destinationAddress,
+        assetCode: payment.assetCode,
+        assetIssuer: payment.assetIssuer,
+        amountEncrypted: this.protectAmount(payment.amount),
+        occurredAt: payment.occurredAt,
+        memo: memoContext as Prisma.InputJsonValue,
+        isEligible,
+        ...ledgerContext,
+      };
+
+      // A replaced operation id now names a different payment. Its stored
+      // content — and the owner's classification of it — described the old
+      // one, so it is rebuilt from Horizon and must be classified again.
+      const isReplaced = replaced.has(payment.operationId);
 
       await this.prisma.payment.upsert({
         where: {
           operationId: payment.operationId,
         },
-        update: {
-          isEligible,
-          occurredAt: payment.occurredAt,
-          memo: memoContext as Prisma.InputJsonValue,
-        },
+        update: isReplaced
+          ? { ...content, classification: PaymentClassification.UNKNOWN }
+          : {
+              isEligible,
+              occurredAt: payment.occurredAt,
+              memo: memoContext as Prisma.InputJsonValue,
+              ...ledgerContext,
+            },
         create: {
-          userId: user.id,
+          ...content,
           operationId: payment.operationId,
-          stellarTransactionHash: payment.stellarTransactionHash,
-          sourceAddress: payment.sourceAddress,
-          destinationAddress: payment.destinationAddress,
-          assetCode: payment.assetCode,
-          assetIssuer: payment.assetIssuer,
-          amountEncrypted: this.protectAmount(payment.amount),
-          occurredAt: payment.occurredAt,
-          memo: memoContext as Prisma.InputJsonValue,
           classification: PaymentClassification.UNKNOWN,
-          isEligible,
         },
       });
+      // The operation index comes from the operation id (a Horizon TOID) and,
+      // with the network and transaction hash, forms the payment's canonical
+      // identity. Persisting it lets two payment operations in the same
+      // transaction remain distinct, and lets a reorg replay or a backfill key
+      // on the same identity as the live sync.
+      const operationIndex =
+        payment.operationIndex ??
+        operationIndexFromToid(payment.operationId);
 
+      try {
+        // Reprocessing the same operation is idempotent: the upsert keys on the
+        // globally-unique operationId, so a replayed page updates the row in
+        // place. The composite unique on (network, txHash, operationIndex)
+        // rejects a genuinely conflicting duplicate — a different operationId
+        // claiming an identity that already belongs to another row — which
+        // surfaces here as P2002 and is counted rather than allowed to corrupt
+        // the ledger or fail the whole sync.
+        await this.prisma.payment.upsert({
+          where: {
+            operationId: payment.operationId,
+          },
+          update: {
+            isEligible,
+            occurredAt: payment.occurredAt,
+            memo: memoContext as Prisma.InputJsonValue,
+            network,
+            operationIndex,
+          },
+          create: {
+            userId: user.id,
+            network,
+            operationId: payment.operationId,
+            operationIndex,
+            stellarTransactionHash: payment.stellarTransactionHash,
+            sourceAddress: payment.sourceAddress,
+            destinationAddress: payment.destinationAddress,
+            assetCode: payment.assetCode,
+            assetIssuer: payment.assetIssuer,
+            amountEncrypted: this.protectAmount(payment.amount),
+            occurredAt: payment.occurredAt,
+            memo: memoContext as Prisma.InputJsonValue,
+            classification: PaymentClassification.UNKNOWN,
+            isEligible,
+          },
+        });
+      } catch (error) {
+        if (
+          error instanceof Prisma.PrismaClientKnownRequestError &&
+          error.code === "P2002"
+        ) {
+          conflicts += 1;
+          continue;
+        }
+        throw error;
+      }
+
+      if (isReplaced) rewritten += 1;
       if (existing) {
         updated += 1;
       } else {
@@ -129,12 +319,27 @@ export class PaymentsService {
       }
     }
 
+    return { created, updated, skipped, enrichmentErrors, rewritten };
+  }
+
+  private syncResult(
+    totalFetched: number,
+    counts: { created: number; updated: number; skipped: number; enrichmentErrors: number },
+    finality: FinalityOutcome,
+  ) {
     return {
+      totalFetched,
+      created: counts.created,
+      updated: counts.updated,
+      skipped: counts.skipped,
+      enrichmentErrors: counts.enrichmentErrors,
+      finality,
       totalFetched: incomingPayments.length,
       created,
       updated,
       skipped,
       enrichmentErrors,
+      conflicts,
     };
   }
 
@@ -176,6 +381,7 @@ export class PaymentsService {
     user: { id: string },
     paymentId: string,
     classification: PaymentClassification,
+    reasonCode: string = "USER_RECLASSIFICATION",
   ) {
     const payment = await this.prisma.payment.findFirst({
       where: {
@@ -185,6 +391,7 @@ export class PaymentsService {
       select: {
         id: true,
         classification: true,
+        classificationRevision: true,
         assetCode: true,
         assetIssuer: true,
         isEligible: true,
@@ -195,15 +402,44 @@ export class PaymentsService {
       throw new NotFoundException("Payment not found");
     }
 
-    const updated = await this.prisma.payment.update({
-      where: {
-        id: payment.id,
-      },
-      data: {
-        classification,
-      },
+    // Skip update if classification is the same (no-op change)
+    if (payment.classification === classification) {
+      return this.toPaymentDto(
+        await this.prisma.payment.findUniqueOrThrow({
+          where: { id: paymentId },
+        }),
+      );
+    }
+
+    // Atomic transaction: update payment and create history record
+    const result = await this.prisma.$transaction(async (tx) => {
+      const newRevision = payment.classificationRevision + 1;
+
+      // Update the payment with new classification and incremented revision
+      const updatedPayment = await tx.payment.update({
+        where: { id: payment.id },
+        data: {
+          classification,
+          classificationRevision: newRevision,
+        },
+      });
+
+      // Create immutable history record
+      await tx.paymentClassificationHistory.create({
+        data: {
+          paymentId: payment.id,
+          actorId: user.id,
+          previousClassification: payment.classification,
+          newClassification: classification,
+          reasonCode,
+          classificationRevision: newRevision,
+        },
+      });
+
+      return updatedPayment;
     });
 
+    // Create audit log entry (outside transaction to avoid coupling)
     await this.prisma.auditLog.create({
       data: {
         actorType: "user",
@@ -214,6 +450,8 @@ export class PaymentsService {
         metadata: {
           previousClassification: payment.classification,
           nextClassification: classification,
+          classificationRevision: result.classificationRevision,
+          reasonCode,
           assetCode: payment.assetCode,
           assetIssuer: payment.assetIssuer,
           isEligible: payment.isEligible,
@@ -221,11 +459,14 @@ export class PaymentsService {
       },
     });
 
-    return this.toPaymentDto(updated);
-  }
+    await this.eligibility.evaluatePayments(
+      user.id,
+      [payment.id],
+      "classification_changed",
+    );
 
-  private assetKey(code: string, issuer: string | null) {
-    return `${code}:${issuer ?? "native"}`;
+    return this.toPaymentDto(updated);
+    return this.toPaymentDto(result);
   }
 
   private protectAmount(amount: string) {
@@ -235,15 +476,30 @@ export class PaymentsService {
   private toPaymentDto(payment: Payment) {
     return {
       id: payment.id,
+      network: payment.network,
       operationId: payment.operationId,
+      operationIndex: payment.operationIndex,
       stellarTransactionHash: payment.stellarTransactionHash,
-      sourceAddress: payment.sourceAddress,
-      destinationAddress: payment.destinationAddress,
+      // Owner-only DTO. A row whose ciphertext cannot be read shows null
+      // rather than failing the whole listing or exposing the stored value.
+      sourceAddress: this.addressCipher.tryReveal(
+        { encrypted: payment.sourceAddressEncrypted, plaintext: payment.sourceAddress },
+        "source",
+      ),
+      destinationAddress: this.addressCipher.tryReveal(
+        {
+          encrypted: payment.destinationAddressEncrypted,
+          plaintext: payment.destinationAddress,
+        },
+        "destination",
+      ),
       assetCode: payment.assetCode,
       assetIssuer: payment.assetIssuer,
       occurredAt: payment.occurredAt,
       classification: payment.classification,
+      classificationRevision: payment.classificationRevision,
       isEligible: payment.isEligible,
+      finalityHeld: payment.finalityHoldAt !== null,
       createdAt: payment.createdAt,
       updatedAt: payment.updatedAt,
       memoContext: this.readMemoContext(payment.memo),
@@ -251,30 +507,6 @@ export class PaymentsService {
   }
 
   private readMemoContext(memo: Prisma.JsonValue | null): NormalizedMemo {
-    if (!memo || typeof memo !== "object" || Array.isArray(memo)) {
-      return { type: "none" };
-    }
-
-    const stored = memo as Record<string, Prisma.JsonValue>;
-    if (stored.type === "none") {
-      return { type: "none" };
-    }
-
-    if (typeof stored.type !== "string" || typeof stored.value !== "string") {
-      return { type: "none" };
-    }
-
-    if (stored.type === "text") {
-      return {
-        type: "text",
-        value: Array.from(stored.value).slice(0, 500).join(""),
-        truncated: stored.truncated === true,
-      };
-    }
-
-    return normalizeMemo({
-      memo_type: stored.type === "return_hash" ? "return" : stored.type,
-      memo: stored.value,
-    });
+    return decodeStoredMemo(memo, this.paymentEncryptionKeyring);
   }
 }

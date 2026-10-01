@@ -156,4 +156,38 @@ export const FIELD_LIMITS = {
    * smuggle an unbounded document into an audit-log row.
    */
   revocationReason: 500,
+   * Proof ids per batch verification request.
+   *
+   * A relying party reconciling a page of proofs verifies tens at a time, not
+   * hundreds; 50 keeps the fan-out to storage and the anchoring contract
+   * bounded while covering every realistic dashboard refresh. The batch is
+   * charged this many throttling tokens, so the cap and the rate limit together
+   * bound the work one client can demand.
+   */
+  proofIdsPerBatch: 50,
+  /**
+   * Credentials per batch verification request.
+   *
+   * Each credential is an independent document, so the count is lower than the
+   * proof-id cap: 20 documents is a generous page while keeping the aggregate
+   * body within a bound a small container can parse and verify inside one
+   * request deadline.
+   */
+  credentialsPerBatch: 20,
+  /**
+   * Total serialised bytes accepted by the batch credential route.
+   *
+   * Sits just under the batch route's transport limit (the shared
+   * `/api/v1/credentials/verify` route limit of 40 KB), so a batch too large to
+   * be valid is refused before verification runs, while every route limit stays
+   * at or below the 64 KB global body limit. A legitimate batch carries small
+   * documents — 20 typical credentials are well under this — so the bound
+   * constrains abuse, not real requests.
+   */
+  batchCredentialsBytes: 36 * KB,
+  /** SHA256 hashes (sha256:hex...) */
+  hash: 100,
+  /** Signed credential payloads for attestations */
+  credentialBytes: 32 * KB,
+  credentialDepth: 5,
 } as const;

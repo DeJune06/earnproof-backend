@@ -8,13 +8,18 @@ import { StrKey } from "@stellar/stellar-base";
 import { AuthenticatedUser } from "../auth/auth.types";
 import { sha256 } from "../common/crypto/hash";
 import { PrismaService } from "../database/prisma.service";
+import { PaymentEligibilityService } from "../payments/payment-eligibility.service";
+import { ConflictException } from "../common/exceptions/domain.exceptions";
 import { CreateTrustedSourceDto } from "./dto/create-trusted-source.dto";
 import { ListTrustedSourcesDto } from "./dto/list-trusted-sources.dto";
 import { UpdateTrustedSourceDto } from "./dto/update-trusted-source.dto";
 
 @Injectable()
 export class TrustedSourcesService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly eligibility: PaymentEligibilityService,
+  ) {}
 
   /**
    * Normalizes a source address (e.g., Stellar address).
@@ -96,6 +101,7 @@ export class TrustedSourcesService {
         sourceType: input.sourceType || "stellar",
         issuerId: issuerId || undefined,
         status: ResourceStatus.ACTIVE,
+        revision: 0,
       },
       include: {
         issuer: {
@@ -128,6 +134,9 @@ export class TrustedSourcesService {
         },
       },
     });
+
+    // Payments from this sender are now from a trusted source.
+    await this.eligibility.reevaluateSource(user.id, normalizedAddress);
 
     return this.formatTrustedSource(trustedSource);
   }
@@ -232,6 +241,7 @@ export class TrustedSourcesService {
         id: true,
         displayName: true,
         issuerId: true,
+        revision: true,
       },
     });
 
@@ -268,13 +278,29 @@ export class TrustedSourcesService {
       }
     }
 
-    // Update the trusted source
-    const updated = await this.prisma.trustedSource.update({
-      where: { id: trustedSourceId },
+    // Attempt optimistic update with revision check
+    const updated = await this.prisma.trustedSource.updateMany({
+      where: {
+        id: trustedSourceId,
+        revision: input.expectedRevision,
+      },
       data: {
         displayName: input.displayName !== undefined ? input.displayName : undefined,
         issuerId: newIssuerId !== undefined ? newIssuerId : undefined,
+        revision: input.expectedRevision + 1,
       },
+    });
+
+    // If no records were updated, the revision didn't match
+    if (updated.count === 0) {
+      throw new ConflictException(
+        "Trusted source has been modified by another request. Please refresh and retry.",
+        existing.revision,
+      );
+    }
+
+    const result = await this.prisma.trustedSource.findUniqueOrThrow({
+      where: { id: trustedSourceId },
       include: {
         issuer: {
           select: {
@@ -301,14 +327,21 @@ export class TrustedSourcesService {
         resourceId: trustedSourceId,
         metadata: {
           displayNameChanged:
-            existing.displayName !== updated.displayName,
+            existing.displayName !== result.displayName,
           previousIssuerId: existing.issuerId || null,
-          nextIssuerId: updated.issuerId || null,
+          nextIssuerId: result.issuerId || null,
+          revision: result.revision,
         },
       },
     });
 
+    // An issuer link change can change SOURCE_ISSUER_VERIFIED.
+    if ((existing.issuerId || null) !== (updated.issuerId || null)) {
+      await this.eligibility.reevaluateSource(user.id, updated.sourceAddress);
+    }
+
     return this.formatTrustedSource(updated);
+    return this.formatTrustedSource(result);
   }
 
   /**
@@ -374,6 +407,8 @@ export class TrustedSourcesService {
       },
     });
 
+    await this.eligibility.reevaluateSource(user.id, trustedSource.sourceAddress);
+
     return {
       id: deleted.id,
       status: deleted.status,
@@ -391,6 +426,7 @@ export class TrustedSourcesService {
       sourceAddress: record.sourceAddress,
       displayName: record.displayName || null,
       sourceType: record.sourceType || "stellar",
+      revision: record.revision,
       issuer: record.issuer
         ? {
             id: record.issuer.id,

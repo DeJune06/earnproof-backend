@@ -1,4 +1,4 @@
-import { BadRequestException, ForbiddenException } from "@nestjs/common";
+﻿import { BadRequestException, ForbiddenException } from "@nestjs/common";
 import { ApiKeyScope } from "@prisma/client";
 import { AuthenticatedUser } from "../auth/auth.types";
 import { ApiKeysController } from "./api-keys.controller";
@@ -60,6 +60,12 @@ describe("ApiKeysController - Authorization", () => {
     };
     controller = new ApiKeysController(
       apiKeyService as never,
+      {
+        getSummary: jest.fn().mockResolvedValue([]),
+        freezeOnRevocation: jest.fn().mockResolvedValue(undefined),
+        recordUsage: jest.fn().mockResolvedValue(undefined),
+      } as never,
+      { consume: jest.fn().mockResolvedValue({ userId: 'user_1' }), issue: jest.fn().mockResolvedValue({ token: 'tok', expiresAt: new Date() }) } as never,
       prismaService as never,
     );
   });
@@ -121,13 +127,17 @@ describe("ApiKeysController - Authorization", () => {
 
       await controller.listKeys(creatorUser, { organizationId });
 
+      // Deleted organizations never resolve; archived ones are resolved so
+      // the caller can tell "archived" apart from "not yours".
       expect(prismaService.organization.findFirst).toHaveBeenCalledWith({
         where: {
           id: organizationId,
+          deletedAt: null,
           createdById: creatorUser.id,
         },
         select: {
           id: true,
+          archivedAt: true,
         },
       });
     });
@@ -141,9 +151,11 @@ describe("ApiKeysController - Authorization", () => {
       expect(prismaService.organization.findFirst).toHaveBeenCalledWith({
         where: {
           id: organizationId,
+          deletedAt: null,
         },
         select: {
           id: true,
+          archivedAt: true,
         },
       });
     });
