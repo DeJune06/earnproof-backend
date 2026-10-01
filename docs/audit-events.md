@@ -53,6 +53,11 @@ and continues.
 | `webhook.delivery_replayed` | webhook | `audit_log` | user | success | actor | fail_closed |
 | `operator.organization_created` | operator | `audit_log` | user | success | resource | fail_closed |
 | `operator.organization_updated` | operator | `audit_log` | user | success | resource | fail_closed |
+| `operator.organization_archived` | operator | `audit_log` | user | success | resource | fail_closed |
+| `operator.organization_restored` | operator | `audit_log` | user | success | resource | fail_closed |
+| `operator.organization_legal_hold_placed` | operator | `audit_log` | user | success | resource | fail_closed |
+| `operator.organization_legal_hold_released` | operator | `audit_log` | user | success | resource | fail_closed |
+| `operator.organization_deleted` | operator | `audit_log` | user | success | resource | fail_closed |
 | `operator.payment_classification_updated` | operator | `audit_log` | user | success | actor | fail_closed |
 | `operator.trusted_source_created` | operator | `audit_log` | user | success | actor | fail_closed |
 | `operator.trusted_source_updated` | operator | `audit_log` | user | success | actor | fail_closed |

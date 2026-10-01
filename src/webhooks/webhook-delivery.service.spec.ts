@@ -621,6 +621,71 @@ describe("WebhookDeliveryService", () => {
       );
     });
   });
+
+  // -------------------------------------------------------------------------
+  // Organization archival
+  // -------------------------------------------------------------------------
+  describe("organization archival", () => {
+    it("fails a scheduled delivery without sending it once the organization is archived", async () => {
+      const secretEncrypted = makeEncryptedSecret();
+      const deliveries = new Map<string, Record<string, unknown>>();
+      const archivedWebhook = {
+        id: "webhook_archived",
+        url: "https://example.com/hook",
+        secretEncrypted,
+        status: "ACTIVE",
+        organization: { archivedAt: new Date("2026-01-01T00:00:00.000Z") },
+      };
+      const prisma = buildPrisma(deliveries, [archivedWebhook]);
+      deliveries.set("delivery_archived", {
+        id: "delivery_archived",
+        webhookId: "webhook_archived",
+        eventType: "proof.created",
+        eventId: "event_archived",
+        attempt: 2,
+        status: WebhookDeliveryStatus.PENDING,
+        replayOf: null,
+        createdAt: new Date(),
+      });
+      const fetchMock = jest.fn();
+      global.fetch = fetchMock as unknown as typeof fetch;
+
+      const service = new WebhookDeliveryService(
+        prisma as never,
+        new WebhookSigningService(),
+        makeConfig() as never,
+      );
+      await (service as unknown as { runDelivery: Function }).runDelivery(
+        "delivery_archived",
+        makeEnvelope(),
+      );
+
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(deliveries.get("delivery_archived")).toMatchObject({
+        status: WebhookDeliveryStatus.FAILED,
+        failureReason: "organization archived before delivery",
+      });
+    });
+
+    it("enqueues events only for organizations that are not archived", async () => {
+      const prisma = buildPrisma(new Map(), []);
+      const service = new WebhookDeliveryService(
+        prisma as never,
+        new WebhookSigningService(),
+        makeConfig() as never,
+      );
+
+      await service.enqueueForUser("user_1", "proof.created" as never, {} as never);
+
+      expect(prisma.user.findUnique).toHaveBeenCalledWith(
+        expect.objectContaining({
+          select: {
+            organizations: expect.objectContaining({ where: { archivedAt: null } }),
+          },
+        }),
+      );
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------

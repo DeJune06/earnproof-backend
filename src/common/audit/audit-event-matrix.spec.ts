@@ -6,6 +6,7 @@ import { WalletRotationService } from "../../auth/wallet-rotation.service";
 import { sep53MessageHash } from "../../auth/wallet-signature";
 import { VerificationEventService } from "../../audit/verification-event.service";
 import { IssuersService } from "../../issuers/issuers.service";
+import { OrganizationLifecycleService } from "../../organizations/organization-lifecycle.service";
 import { OrganizationsService } from "../../organizations/organizations.service";
 import { PaymentBackfillService } from "../../payments/payment-backfill.service";
 import { PaymentsService } from "../../payments/payments.service";
@@ -345,6 +346,9 @@ const scenarios: Scenario[] = [
             .fn()
             .mockResolvedValue({ ...issuer, status: "ACTIVE" }),
         },
+        organization: {
+          findUnique: jest.fn().mockResolvedValue({ archivedAt: null }),
+        },
         auditLog: sink.auditLog,
       };
 
@@ -533,6 +537,64 @@ const scenarios: Scenario[] = [
       );
     },
   },
+  ...(
+    [
+      ["operator.organization_archived", "archiving a tenant organisation", "archive", { archivedAt: null }],
+      ["operator.organization_restored", "restoring a tenant organisation", "restore", { archivedAt: new Date("2026-01-01T00:00:00.000Z") }],
+      ["operator.organization_legal_hold_placed", "placing a legal hold", "placeLegalHold", { legalHoldAt: null }],
+      ["operator.organization_legal_hold_released", "releasing a legal hold", "releaseLegalHold", { legalHoldAt: new Date("2026-01-01T00:00:00.000Z"), legalHoldReference: "LEGAL-2026-001" }],
+      ["operator.organization_deleted", "deleting an archived tenant organisation", "deleteOrganization", { archivedAt: new Date("2025-01-01T00:00:00.000Z") }],
+    ] as Array<[string, string, string, Record<string, unknown>]>
+  ).map(([event, name, operation, state]): Scenario => ({
+    event,
+    outcome: "success",
+    name,
+    run: (sink) => {
+      const org = {
+        id: ORGANIZATION_ID,
+        status: "ACTIVE",
+        archivedAt: null,
+        legalHoldAt: null,
+        legalHoldReference: null,
+        deletedAt: null,
+        ...state,
+      };
+      const tx = {
+        $queryRaw: jest.fn().mockResolvedValue([]),
+        organization: {
+          findUnique: jest.fn().mockResolvedValue(org),
+          updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+          update: jest.fn().mockResolvedValue(org),
+        },
+        issuer: { count: jest.fn().mockResolvedValue(0) },
+        apiKey: { updateMany: jest.fn().mockResolvedValue({ count: 2 }) },
+        webhook: {
+          findMany: jest.fn().mockResolvedValue([{ id: "webhook_1" }]),
+          deleteMany: jest.fn().mockResolvedValue({ count: 1 }),
+        },
+        webhookDelivery: { deleteMany: jest.fn().mockResolvedValue({ count: 3 }) },
+        idempotencyRecord: { deleteMany: jest.fn().mockResolvedValue({ count: 0 }) },
+        auditLog: sink.auditLog,
+      };
+      const prisma = {
+        $transaction: jest.fn((run: (client: typeof tx) => unknown) => run(tx)),
+      };
+      const service = new OrganizationLifecycleService(prisma as never);
+
+      switch (operation) {
+        case "archive":
+          return service.archive(ADMIN, ORGANIZATION_ID);
+        case "restore":
+          return service.restore(ADMIN, ORGANIZATION_ID);
+        case "placeLegalHold":
+          return service.placeLegalHold(ADMIN, ORGANIZATION_ID, "LEGAL-2026-001");
+        case "releaseLegalHold":
+          return service.releaseLegalHold(ADMIN, ORGANIZATION_ID);
+        default:
+          return service.deleteOrganization(ADMIN, ORGANIZATION_ID);
+      }
+    },
+  })),
   {
     event: "operator.payment_classification_updated",
     outcome: "success",

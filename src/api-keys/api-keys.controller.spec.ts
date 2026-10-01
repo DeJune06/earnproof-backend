@@ -127,13 +127,17 @@ describe("ApiKeysController - Authorization", () => {
 
       await controller.listKeys(creatorUser, { organizationId });
 
+      // Deleted organizations never resolve; archived ones are resolved so
+      // the caller can tell "archived" apart from "not yours".
       expect(prismaService.organization.findFirst).toHaveBeenCalledWith({
         where: {
           id: organizationId,
+          deletedAt: null,
           createdById: creatorUser.id,
         },
         select: {
           id: true,
+          archivedAt: true,
         },
       });
     });
@@ -147,9 +151,11 @@ describe("ApiKeysController - Authorization", () => {
       expect(prismaService.organization.findFirst).toHaveBeenCalledWith({
         where: {
           id: organizationId,
+          deletedAt: null,
         },
         select: {
           id: true,
+          archivedAt: true,
         },
       });
     });

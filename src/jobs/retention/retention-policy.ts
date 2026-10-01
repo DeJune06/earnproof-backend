@@ -238,6 +238,26 @@ export const RETENTION_CLASSES: readonly RetentionClass[] = [
       "ledger. Pending intents are unfinished work. Deleting either loses the " +
       "record of what was anchored, or the work itself.",
   },
+  {
+    key: "archived_organizations",
+    model: "Organization",
+    purpose:
+      "Archived tenant organizations. The period is the minimum time an " +
+      "organization stays archived, and therefore restorable, before the " +
+      "deletion workflow will accept it.",
+    owner: "Security",
+    defaultDays: 30,
+    envVar: "RETENTION_ORGANIZATION_ARCHIVE_DAYS",
+    cutoffColumn: "archivedAt",
+    backingIndex: "@@index([archivedAt])",
+    disposal: DisposalMethod.ANONYMISE,
+    sweep: SweepMode.PRESERVED,
+    preservationReason:
+      "Deleting an organization revokes its credentials and anonymises its " +
+      "profile, and must first pass the dependency, legal-hold and " +
+      "minimum-archive checks. That is an explicit, audited administrator " +
+      "action, never a scheduled sweep.",
+  },
 ];
 
 /** Retention classes the automated job is permitted to sweep. */

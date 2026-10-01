@@ -1,7 +1,10 @@
 import { Module } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { AuthModule } from "../auth/auth.module";
+import { Clock, SystemClock } from "../common/time/clock";
 import { DatabaseModule } from "../database/database.module";
+import { OrganizationLifecycleController } from "./organization-lifecycle.controller";
+import { OrganizationLifecycleService } from "./organization-lifecycle.service";
 import { JobsModule } from "../jobs/jobs.module";
 import { OrganizationsService } from "./organizations.service";
 import { OrganizationsController } from "./organizations.controller";
@@ -48,6 +51,14 @@ import { AccessReviewController } from "./access-review.controller";
  * tests can swap in an in-memory implementation against the same token.
  */
 @Module({
+  imports: [DatabaseModule, AuthModule],
+  controllers: [OrganizationsController, OrganizationLifecycleController],
+  providers: [
+    OrganizationsService,
+    OrganizationLifecycleService,
+    { provide: Clock, useClass: SystemClock },
+  ],
+  exports: [OrganizationsService, OrganizationLifecycleService],
   imports: [DatabaseModule, AuthModule, JobsModule],
   controllers: [
     OrganizationsController, 

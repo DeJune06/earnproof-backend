@@ -59,6 +59,12 @@ export class IssuersService {
       );
     }
 
+    if (org.archivedAt) {
+      throw new ConflictException(
+        "Organization is archived; issuers cannot be registered",
+      );
+    }
+
     // Check if admin is organization creator (admins can manage any org, but log it)
     if (user.role !== "ADMIN" && org.createdById !== user.id) {
       throw new ForbiddenException(
@@ -175,6 +181,21 @@ export class IssuersService {
         `Invalid status transition: ${issuer.status} → ${input.status}. ` +
           `Valid transitions from ${issuer.status} are: ${validNextStatuses.join(", ") || "none"}`,
       );
+    }
+
+    // Re-activating an issuer vouches for new attestations, which an archived
+    // organization may not do. Suspending or revoking stays allowed, so an
+    // archived organization can still be wound down.
+    if (input.status === ResourceStatus.ACTIVE) {
+      const org = await this.prisma.organization.findUnique({
+        where: { id: issuer.organizationId },
+        select: { archivedAt: true },
+      });
+      if (org?.archivedAt) {
+        throw new ConflictException(
+          "Organization is archived; its issuers cannot be activated",
+        );
+      }
     }
 
     const now = new Date();

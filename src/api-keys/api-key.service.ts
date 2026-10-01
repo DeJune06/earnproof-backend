@@ -171,6 +171,9 @@ export class ApiKeyService {
         organizationId,
         status: ResourceStatus.ACTIVE,
         OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }],
+        // An archived or deleted organization's keys stop authenticating the
+        // moment it is archived; they start again only if it is restored.
+        organization: { archivedAt: null },
       },
       include: {
         scopeAssignments: { select: { scope: true } },

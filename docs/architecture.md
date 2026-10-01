@@ -106,10 +106,17 @@ Tenant boundary. Every multi-tenant resource hangs off an organization.
 
 | | |
 |---|---|
+| **Public interface** | `/organizations` CRUD and membership; ADMIN-only `POST /organizations/:id/archive`, `/restore`, `PUT/DELETE /organizations/:id/legal-hold`, `GET /organizations/:id/deletion-eligibility`, `DELETE /organizations/:id` |
 | **Public interface** | `/organizations` CRUD and membership, `GET /organizations/:id/usage` (quota usage) |
 | **Owned tables** | `Organization` |
-| **Key files** | [`organizations.service.ts`](../src/organizations/organizations.service.ts) |
-| **Must not depend on** | `proofs`, `payments`, `credentials`, `jobs` |
+| **Key files** | [`organizations.service.ts`](../src/organizations/organizations.service.ts), [`organization-lifecycle.service.ts`](../src/organizations/organization-lifecycle.service.ts) |
+| **Must not depend on** | `proofs`, `payments`, `credentials`, `jobs` (the retention policy table in `jobs/retention` is the one exception: it defines the minimum archive period) |
+
+Archival disables an organization's privileged operations through
+`Organization.archivedAt`, which every such path reads on each call. Deletion
+turns the row into a tombstone rather than removing it, so issuers,
+attestations and audit records keep resolving. See
+[data retention](data-retention.md#organization-lifecycle).
 
 ### `users` — [`src/users/`](../src/users/)
 

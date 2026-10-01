@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   ForbiddenException,
   Injectable,
   Logger,
@@ -53,11 +54,18 @@ export class AttestationsService {
         id: true,
         status: true,
         organizationId: true,
+        organization: { select: { archivedAt: true } },
       },
     });
 
     if (!issuer) {
       throw new NotFoundException(`Issuer with ID "${issuerId}" not found`);
+    }
+
+    if (issuer.organization?.archivedAt) {
+      throw new ConflictException(
+        "Issuer's organization is archived; attestations cannot be issued",
+      );
     }
 
     if (issuer.status !== ResourceStatus.ACTIVE) {

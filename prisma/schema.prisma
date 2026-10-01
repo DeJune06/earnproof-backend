@@ -369,6 +369,20 @@ model Organization {
   status      ResourceStatus  @default(PENDING)
   revision    Int             @default(0)
   createdById String
+  createdBy   User            @relation(fields: [createdById], references: [id])
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+  /// Set while the organization is archived. Every privileged operation on
+  /// the organization and its keys, webhooks and issuers is refused while set.
+  /// Cleared on restore; kept on deletion.
+  archivedAt  DateTime?
+  /// Set while a legal hold forbids deletion. Released explicitly.
+  legalHoldAt DateTime?
+  /// Bounded case or matter reference for the legal hold.
+  legalHoldReference String?  @db.VarChar(64)
+  /// Set when the organization is deleted. The row survives as a tombstone
+  /// so issuers, attestations and audit records keep resolving.
+  deletedAt   DateTime?
   createdBy   User           @relation(fields: [createdById], references: [id])
   createdAt   DateTime       @default(now())
   updatedAt   DateTime       @updatedAt
@@ -386,6 +400,7 @@ model Organization {
   accessReviews AccessReviewCampaign[]
 
   @@index([status])
+  @@index([archivedAt])
 }
 
 model OrganizationMember {
