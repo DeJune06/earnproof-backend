@@ -71,7 +71,10 @@ export type AuditWriteFailureBehavior = "fail_closed" | "fail_open";
 
 /** How the tenant (owning scope) of an event is recovered from the row. */
 export type AuditTenantSource =
-  /** `AuditLog.resourceId` is itself the tenant (the organisation row). */
+  /**
+   * `AuditLog.resourceId` is itself the tenant: the organisation row, or the
+   * user account for account-administration events.
+   */
   | "resource_id"
   /** `AuditLog.metadata.organizationId`. */
   | "metadata_organization_id"
@@ -198,6 +201,19 @@ export const AUDIT_EVENTS: readonly AuditEventDefinition[] = [
     writeFailure: "fail_open",
     requiredMetadata: [],
     description: "An already-consumed challenge was presented a second time.",
+  },
+  {
+    type: "authentication.account_inactive",
+    domain: "authentication",
+    store: "auth_audit_event",
+    match: { store: "auth_audit_event", eventType: AuthEventType.ACCOUNT_INACTIVE },
+    actorTypes: ["wallet"],
+    outcomes: ["denied"],
+    tenant: "wallet_hash",
+    writeFailure: "fail_open",
+    requiredMetadata: [],
+    description:
+      "A suspended, revoked or deleted account proved wallet control and was refused a session.",
   },
   // ------------------------------------------------------- authorization ---
   {
@@ -460,11 +476,25 @@ export const AUDIT_EVENTS: readonly AuditEventDefinition[] = [
       "A trusted payer was soft-deleted; history referencing it is retained.",
   },
   {
+    type: "operator.user_status_changed",
     type: "operator.payment_backfill_requested",
     domain: "operator",
     store: "audit_log",
     match: {
       store: "audit_log",
+      action: "user.status_changed",
+      resourceType: "user",
+    },
+    actorTypes: ["user"],
+    outcomes: ["success"],
+    tenant: "resource_id",
+    writeFailure: "fail_closed",
+    requiredMetadata: ["previousStatus", "newStatus", "sessionsRevoked"],
+    description:
+      "An administrator moved an account between lifecycle states; suspension and revocation also revoke its sessions.",
+  },
+  {
+    type: "operator.user_role_changed",
       action: "payment_backfill.requested",
       resourceType: "payment_backfill",
     },
@@ -482,6 +512,15 @@ export const AUDIT_EVENTS: readonly AuditEventDefinition[] = [
     store: "audit_log",
     match: {
       store: "audit_log",
+      action: "user.role_changed",
+      resourceType: "user",
+    },
+    actorTypes: ["user"],
+    outcomes: ["success"],
+    tenant: "resource_id",
+    writeFailure: "fail_closed",
+    requiredMetadata: ["previousRole", "newRole"],
+    description: "An administrator changed an account's global role.",
       action: "payment_backfill.cancelled",
       resourceType: "payment_backfill",
     },

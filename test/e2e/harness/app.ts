@@ -11,6 +11,7 @@ import { WebhooksModule } from "../../../src/webhooks/webhooks.module";
 import { OrganizationsModule } from "../../../src/organizations/organizations.module";
 import { ApiKeysModule } from "../../../src/api-keys/api-keys.module";
 import { HealthModule } from "../../../src/health/health.module";
+import { UsersModule } from "../../../src/users/users.module";
 import { configureApp } from "../../../src/bootstrap";
 import { withDeadline } from "../../integration/harness/bounded";
 import { integrationConfig } from "../../integration/harness/config";
@@ -45,6 +46,7 @@ import { integrationConfig } from "../../integration/harness/config";
     OrganizationsModule,
     ApiKeysModule,
     HealthModule,
+    UsersModule,
   ],
 })
 class E2eAppModule {}

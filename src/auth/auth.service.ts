@@ -13,6 +13,7 @@ import { sha256 } from "../common/crypto/hash";
 import { AuthAuditService } from "./auth-audit.service";
 import { AuthRateLimiterService } from "./auth-rate-limiter.service";
 import { SessionService } from "./session.service";
+import { canAuthenticate } from "./account-status.policy";
 import type { SessionDeviceHeaders } from "./session-device-metadata";
 import {
   normalizeOrigin,
@@ -276,6 +277,29 @@ export class AuthService {
       );
 
       throw new UnauthorizedException("Invalid wallet signature");
+    }
+
+    // A suspended, revoked or deleted account proves wallet control like any
+    // other, but must not be issued a session. Checked after the signature so
+    // the refusal reveals account state only to the wallet's own key holder.
+    const existingAccount = await this.prisma.user.findUnique({
+      where: { walletAddress: input.walletAddress },
+      select: { status: true },
+    });
+
+    if (existingAccount && !canAuthenticate(existingAccount.status)) {
+      await this.auditService.recordEvent(
+        AuthEventType.ACCOUNT_INACTIVE,
+        input.walletAddress,
+        {
+          challengeId: input.challengeId,
+          success: false,
+          failureReason: "Account is not active",
+          clientMetadata: input.clientMetadata,
+        },
+      );
+
+      throw new UnauthorizedException("Account is not active");
     }
 
     const walletHash = `sha256:${sha256(input.walletAddress)}`;

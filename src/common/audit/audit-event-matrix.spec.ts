@@ -8,6 +8,7 @@ import { OrganizationsService } from "../../organizations/organizations.service"
 import { PaymentBackfillService } from "../../payments/payment-backfill.service";
 import { PaymentsService } from "../../payments/payments.service";
 import { TrustedSourcesService } from "../../trusted-sources/trusted-sources.service";
+import { UsersService } from "../../users/users.service";
 import { WebhooksService } from "../../webhooks/webhooks.service";
 import { findForbiddenAuditContent } from "./audit-redaction";
 import {
@@ -608,6 +609,68 @@ const scenarios: Scenario[] = [
     },
   },
   {
+    event: "operator.user_status_changed",
+    outcome: "success",
+    name: "suspending an account",
+    run: (sink) => {
+      const tx = {
+        user: {
+          findUnique: jest.fn().mockResolvedValue({ status: "ACTIVE" }),
+          updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+          findUniqueOrThrow: jest.fn().mockResolvedValue({
+            id: "user_target",
+            displayName: null,
+            role: "WORKER",
+            status: "SUSPENDED",
+            createdAt: new Date(),
+            updatedAt: new Date(),
+            lastLoginAt: null,
+          }),
+        },
+        authSession: { updateMany: jest.fn().mockResolvedValue({ count: 2 }) },
+        auditLog: sink.auditLog,
+      };
+      const prisma = {
+        $transaction: jest.fn((run: (client: typeof tx) => unknown) => run(tx)),
+      };
+
+      return new UsersService(prisma as never).changeStatus(ADMIN, "user_target", {
+        status: "SUSPENDED",
+        reason: "SECURITY_INCIDENT",
+      } as never);
+    },
+  },
+  {
+    event: "operator.user_role_changed",
+    outcome: "success",
+    name: "changing an account's role",
+    run: (sink) => {
+      const tx = {
+        user: {
+          findUnique: jest
+            .fn()
+            .mockResolvedValue({ role: "WORKER", status: "ACTIVE" }),
+          updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+          findUniqueOrThrow: jest.fn().mockResolvedValue({
+            id: "user_target",
+            displayName: null,
+            role: "DEVELOPER",
+            status: "ACTIVE",
+            createdAt: new Date(),
+            updatedAt: new Date(),
+            lastLoginAt: null,
+          }),
+        },
+        organization: { count: jest.fn().mockResolvedValue(0) },
+        auditLog: sink.auditLog,
+      };
+      const prisma = {
+        $transaction: jest.fn((run: (client: typeof tx) => unknown) => run(tx)),
+      };
+
+      return new UsersService(prisma as never).changeRole(ADMIN, "user_target", {
+        role: "DEVELOPER",
+      } as never);
     event: "operator.payment_backfill_requested",
     outcome: "success",
     name: "requesting a payment backfill",
@@ -701,6 +764,7 @@ const scenarios: Scenario[] = [
       ["authentication.signature_invalid", AuthEventType.SIGNATURE_INVALID, "denied"],
       ["authentication.challenge_expired", AuthEventType.CHALLENGE_EXPIRED, "denied"],
       ["authentication.challenge_replayed", AuthEventType.CHALLENGE_REPLAYED, "denied"],
+      ["authentication.account_inactive", AuthEventType.ACCOUNT_INACTIVE, "denied"],
       ["authorization.rate_limited", AuthEventType.RATE_LIMITED, "denied"],
     ] as Array<[string, AuthEventType, AuditOutcome]>
   ).map(([event, eventType, outcome]): Scenario => ({

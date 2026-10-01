@@ -47,8 +47,8 @@ hope.
 Three layers, and the direction of dependency matters:
 
 1. **Edge** — `auth`, `api-keys`. Establish who is calling.
-2. **Domain** — `organizations`, `issuers`, `payments`, `proofs`, `credentials`,
-   `trusted-sources`. Own product state.
+2. **Domain** — `users`, `organizations`, `issuers`, `payments`, `proofs`,
+   `credentials`, `trusted-sources`. Own product state.
 3. **Infrastructure** — `common`, `config`, `database`, `stellar`, `audit`,
    `jobs`, `webhooks`, `health`. Serve the layers above.
 
@@ -100,6 +100,22 @@ Tenant boundary. Every multi-tenant resource hangs off an organization.
 | **Owned tables** | `Organization` |
 | **Key files** | [`organizations.service.ts`](../src/organizations/organizations.service.ts) |
 | **Must not depend on** | `proofs`, `payments`, `credentials`, `jobs` |
+
+### `users` — [`src/users/`](../src/users/)
+
+Self-service profile and administrative account lifecycle.
+
+| | |
+|---|---|
+| **Public interface** | `GET/PATCH /users/me`; ADMIN-only `GET /users/:id`, `PATCH /users/:id/status`, `PATCH /users/:id/role` |
+| **Owned tables** | `User` (profile, status and role columns) |
+| **Key files** | [`users.service.ts`](../src/users/users.service.ts), [`account-status.policy.ts`](../src/auth/account-status.policy.ts) |
+| **Must not depend on** | `proofs`, `payments`, `credentials`, `webhooks` |
+
+The transition table lives in `auth` because `AuthGuard` and the login path
+enforce it on every request. A status change, its session revocation and its
+audit record commit in one transaction; role is read live by the guard, so a
+role change needs no session revocation.
 
 ### `issuers` — [`src/issuers/`](../src/issuers/)
 
@@ -369,6 +385,7 @@ Each links to enforcing code and a test that fails if it regresses.
 | I23 | Error responses never leak internals — no stack, no Prisma metadata | [`global-exception.filter.ts`](../src/common/filters/global-exception.filter.ts) | [`global-exception.filter.spec.ts`](../src/common/filters/global-exception.filter.spec.ts) |
 | I24 | Every response carries a correlation ID | [`request-id.interceptor.ts`](../src/common/interceptors/request-id.interceptor.ts) | [`request-id.interceptor.spec.ts`](../src/common/interceptors/request-id.interceptor.spec.ts) |
 | I25 | The health endpoint requires no auth and exposes no internals | [`health.controller.ts`](../src/health/health.controller.ts) | [`health.authorization.spec.ts`](../src/health/health.authorization.spec.ts) |
+| I26 | A suspended, revoked or deleted account can neither use nor obtain a session | [`account-status.policy.ts`](../src/auth/account-status.policy.ts) | [`account-status.policy.spec.ts`](../src/auth/account-status.policy.spec.ts), [`users.service.spec.ts`](../src/users/users.service.spec.ts) |
 
 ### Reviewer note
 

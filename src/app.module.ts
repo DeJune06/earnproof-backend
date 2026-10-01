@@ -26,6 +26,7 @@ import { OrganizationsModule } from "./organizations/organizations.module";
 import { PaymentsModule } from "./payments/payments.module";
 import { ProofsModule } from "./proofs/proofs.module";
 import { TrustedSourcesModule } from "./trusted-sources/trusted-sources.module";
+import { UsersModule } from "./users/users.module";
 import { WebhooksModule } from "./webhooks/webhooks.module";
 import { SupportedAssetsModule } from "./supported-assets/supported-assets.module";
 
@@ -56,6 +57,7 @@ import { SupportedAssetsModule } from "./supported-assets/supported-assets.modul
     ProofsModule,
     CredentialsModule,
     TrustedSourcesModule,
+    UsersModule,
     JobsModule,
     WebhooksModule,
     SupportedAssetsModule,

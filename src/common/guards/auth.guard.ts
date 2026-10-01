@@ -8,6 +8,7 @@ import { Request } from "express";
 import { PrismaService } from "../../database/prisma.service";
 import { SessionService } from "../../auth/session.service";
 import { AuthenticatedSession } from "../../auth/auth.types";
+import { canAuthenticate } from "../../auth/account-status.policy";
 
 @Injectable()
 export class AuthGuard implements CanActivate {
@@ -45,7 +46,7 @@ export class AuthGuard implements CanActivate {
       throw new UnauthorizedException("User not found");
     }
 
-    if (user.status === "SUSPENDED" || user.status === "REVOKED" || user.status === "DELETED") {
+    if (!canAuthenticate(user.status)) {
       throw new UnauthorizedException("Account is not active");
     }
 

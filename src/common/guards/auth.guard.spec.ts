@@ -165,6 +165,17 @@ describe("AuthGuard — account status checks", () => {
     ).rejects.toThrow("Account is not active");
   });
 
+  it("admits a PENDING account, which may still authenticate", async () => {
+    const guard = new AuthGuard(
+      makeSessionServiceMock({ sessionId: "s", userId: "user_1" }),
+      makePrismaMock({ ...activeDbUser, status: "PENDING" }) as never,
+    );
+
+    await expect(
+      guard.canActivate(makeContext("Bearer valid.token")),
+    ).resolves.toBe(true);
+  });
+
   it("throws when user row is not found in DB", async () => {
     const guard = new AuthGuard(
       makeSessionServiceMock({ sessionId: "s", userId: "user_1" }),

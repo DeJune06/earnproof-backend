@@ -148,6 +148,7 @@ describe("Auth challenge replay and race-condition tests", () => {
             .mockResolvedValueOnce({ message, walletAddress: walletAddressA, networkPassphrase: "Test SDF Network ; September 2015", origin: "http://localhost:3000" }),
         },
         user: {
+          findUnique: jest.fn().mockResolvedValue(null),
           upsert: jest.fn().mockResolvedValue({
             id: "user_1",
             walletAddress: walletAddressA,
@@ -212,6 +213,7 @@ describe("Auth challenge replay and race-condition tests", () => {
             .mockResolvedValue({ message, walletAddress: walletAddressA, networkPassphrase: "Test SDF Network ; September 2015", origin: "http://localhost:3000" }),
         },
         user: {
+          findUnique: jest.fn().mockResolvedValue(null),
           upsert: jest.fn().mockResolvedValue({
             id: "user_1",
             walletAddress: walletAddressA,
@@ -296,6 +298,7 @@ describe("Auth challenge replay and race-condition tests", () => {
             .mockResolvedValue({ message, walletAddress: walletAddressA, networkPassphrase: "Test SDF Network ; September 2015", origin: "http://localhost:3000" }),
         },
         user: {
+          findUnique: jest.fn().mockResolvedValue(null),
           upsert: jest.fn().mockResolvedValue({
             id: "user_1",
             walletAddress: walletAddressA,
@@ -348,6 +351,7 @@ describe("Auth challenge replay and race-condition tests", () => {
           findFirst: jest.fn().mockResolvedValue(null),
         },
         user: {
+          findUnique: jest.fn().mockResolvedValue(null),
           upsert: jest.fn(),
         },
       };
@@ -381,6 +385,7 @@ describe("Auth challenge replay and race-condition tests", () => {
           }),
         },
         user: {
+          findUnique: jest.fn().mockResolvedValue(null),
           upsert: jest.fn().mockResolvedValue({
             id: "user_1",
             walletAddress: walletAddressA,
@@ -420,6 +425,7 @@ describe("Auth challenge replay and race-condition tests", () => {
           findFirst: jest.fn().mockResolvedValue(null),
         },
         user: {
+          findUnique: jest.fn().mockResolvedValue(null),
           upsert: jest.fn(),
         },
       };
@@ -452,6 +458,7 @@ describe("Auth challenge replay and race-condition tests", () => {
           findFirst: jest.fn().mockResolvedValue(null),
         },
         user: {
+          findUnique: jest.fn().mockResolvedValue(null),
           upsert: jest.fn(),
         },
       };
@@ -487,6 +494,7 @@ describe("Auth challenge replay and race-condition tests", () => {
           }),
         },
         user: {
+          findUnique: jest.fn().mockResolvedValue(null),
           upsert: jest.fn(),
         },
       };
@@ -524,6 +532,7 @@ describe("Auth challenge replay and race-condition tests", () => {
           }),
         },
         user: {
+          findUnique: jest.fn().mockResolvedValue(null),
           upsert: jest.fn(),
         },
       };
@@ -562,6 +571,7 @@ describe("Auth challenge replay and race-condition tests", () => {
           }),
         },
         user: {
+          findUnique: jest.fn().mockResolvedValue(null),
           upsert: jest.fn(),
         },
       };
@@ -595,6 +605,7 @@ describe("Auth challenge replay and race-condition tests", () => {
           }),
         },
         user: {
+          findUnique: jest.fn().mockResolvedValue(null),
           upsert: jest.fn(),
         },
       };
@@ -629,6 +640,7 @@ describe("Auth challenge replay and race-condition tests", () => {
           findFirst: jest.fn().mockResolvedValue(null),
         },
         user: {
+          findUnique: jest.fn().mockResolvedValue(null),
           upsert: jest.fn(),
         },
       };
@@ -684,6 +696,7 @@ describe("Auth challenge replay and race-condition tests", () => {
           }),
         },
         user: {
+          findUnique: jest.fn().mockResolvedValue(null),
           upsert: jest.fn().mockResolvedValue({
             id: "user_1",
             walletAddress: walletAddressA,
@@ -733,6 +746,7 @@ describe("Auth challenge replay and race-condition tests", () => {
           }),
         },
         user: {
+          findUnique: jest.fn().mockResolvedValue(null),
           upsert: jest.fn(),
         },
       };
@@ -779,6 +793,7 @@ describe("Auth challenge replay and race-condition tests", () => {
             }),
         },
         user: {
+          findUnique: jest.fn().mockResolvedValue(null),
           upsert: jest.fn(),
         },
       };

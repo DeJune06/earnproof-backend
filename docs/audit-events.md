@@ -38,6 +38,7 @@ and continues.
 | `authentication.signature_invalid` | authentication | `auth_audit_event` | wallet | denied | wallet hash | fail_open |
 | `authentication.challenge_expired` | authentication | `auth_audit_event` | wallet | denied | wallet hash | fail_open |
 | `authentication.challenge_replayed` | authentication | `auth_audit_event` | wallet | denied | wallet hash | fail_open |
+| `authentication.account_inactive` | authentication | `auth_audit_event` | wallet | denied | wallet hash | fail_open |
 | `authorization.rate_limited` | authorization | `auth_audit_event` | wallet | denied | wallet hash | fail_open |
 | `authorization.api_key_authenticated` | authorization | `audit_log` | api_key | success | `metadata.organizationId` | fail_open |
 | `issuer.created` | issuer | `audit_log` | user | success | `metadata.organizationId` | fail_closed |
@@ -55,6 +56,8 @@ and continues.
 | `operator.trusted_source_created` | operator | `audit_log` | user | success | actor | fail_closed |
 | `operator.trusted_source_updated` | operator | `audit_log` | user | success | actor | fail_closed |
 | `operator.trusted_source_deleted` | operator | `audit_log` | user | success | actor | fail_closed |
+| `operator.user_status_changed` | operator | `audit_log` | user | success | resource | fail_closed |
+| `operator.user_role_changed` | operator | `audit_log` | user | success | resource | fail_closed |
 | `operator.payment_backfill_requested` | operator | `audit_log` | user | success | actor | fail_closed |
 | `operator.payment_backfill_cancelled` | operator | `audit_log` | user | success | actor | fail_closed |
 

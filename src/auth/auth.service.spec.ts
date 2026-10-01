@@ -187,6 +187,40 @@ describe("AuthService.verifyChallenge", () => {
     expect(result.session.expiresAt).toBeInstanceOf(Date);
   });
 
+  it.each(["SUSPENDED", "REVOKED", "DELETED"])(
+    "refuses a session to a %s account after a valid signature and audits it",
+    async (status) => {
+      const prisma = makePrismaMock();
+      prisma.user.findUnique.mockResolvedValue({ ...dbUser, status });
+      const authSession = { create: jest.fn() };
+      (prisma as Record<string, unknown>).authSession = authSession;
+      const auditSvc = makeAuditServiceMock();
+      const svc = new AuthService(
+        prisma as never,
+        new SessionService(prisma as never, config),
+        auditSvc as never,
+        makeRateLimiterMock() as never,
+        config,
+      );
+
+      const signature = keypair
+        .sign(sep53MessageHash(challenge.message))
+        .toString("base64");
+
+      await expect(
+        svc.verifyChallenge({ challengeId: challenge.id, walletAddress, signature }),
+      ).rejects.toThrow("Account is not active");
+
+      expect(prisma.user.upsert).not.toHaveBeenCalled();
+      expect(authSession.create).not.toHaveBeenCalled();
+      expect(auditSvc.recordEvent).toHaveBeenCalledWith(
+        AuthEventType.ACCOUNT_INACTIVE,
+        walletAddress,
+        expect.objectContaining({ success: false, challengeId: challenge.id }),
+      );
+    },
+  );
+
   it("checks rate limits before verification", async () => {
     const prisma = makePrismaMock();
     (prisma as Record<string, unknown>).authSession = {
