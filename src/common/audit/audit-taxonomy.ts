@@ -167,6 +167,28 @@ export const AUDIT_EVENTS: readonly AuditEventDefinition[] = [
     description: "A wallet proved control of its key and a session was issued.",
   },
   {
+    type: "authentication.wallet_rotated",
+    domain: "authentication",
+    store: "audit_log",
+    match: {
+      store: "audit_log",
+      action: "user.wallet_rotated",
+      resourceType: "user",
+    },
+    actorTypes: ["user"],
+    outcomes: ["success"],
+    tenant: "actor_id",
+    writeFailure: "fail_closed",
+    requiredMetadata: [
+      "rotationId",
+      "previousWalletHash",
+      "newWalletHash",
+      "sessionsRevoked",
+    ],
+    description:
+      "An account proved control of its current and replacement keys and its wallet address was replaced; every session was revoked.",
+  },
+  {
     type: "authentication.signature_invalid",
     domain: "authentication",
     store: "auth_audit_event",

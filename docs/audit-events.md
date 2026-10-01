@@ -35,6 +35,7 @@ and continues.
 | --- | --- | --- | --- | --- | --- | --- |
 | `authentication.challenge_created` | authentication | `auth_audit_event` | wallet | success | wallet hash | fail_open |
 | `authentication.challenge_verified` | authentication | `auth_audit_event` | wallet | success | wallet hash | fail_open |
+| `authentication.wallet_rotated` | authentication | `audit_log` | user | success | actor | fail_closed |
 | `authentication.signature_invalid` | authentication | `auth_audit_event` | wallet | denied | wallet hash | fail_open |
 | `authentication.challenge_expired` | authentication | `auth_audit_event` | wallet | denied | wallet hash | fail_open |
 | `authentication.challenge_replayed` | authentication | `auth_audit_event` | wallet | denied | wallet hash | fail_open |

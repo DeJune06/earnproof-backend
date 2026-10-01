@@ -720,3 +720,74 @@ describe("SessionService expiry boundary (deterministic clock)", () => {
     });
   });
 });
+
+// ---------------------------------------------------------------------------
+// Wallet binding (wallet rotation)
+// ---------------------------------------------------------------------------
+
+describe("SessionService wallet binding", () => {
+  const user = {
+    id: "user_1",
+    walletAddress: "G".padEnd(56, "A"),
+    walletHash: "sha256:wallet-a",
+    role: "WORKER",
+  };
+
+  it("records the wallet identity a session is issued to", async () => {
+    const prisma = makePrismaMock();
+    prisma.authSession.create.mockResolvedValue({});
+    const svc = new SessionService(prisma as never, config);
+
+    await svc.create(user);
+
+    expect(prisma.authSession.create.mock.calls[0][0].data.walletHash).toBe(
+      "sha256:wallet-a",
+    );
+  });
+
+  it("carries the wallet identity onto a rotated session", async () => {
+    const prisma = makePrismaMock();
+    const tx = {
+      authSession: {
+        findUnique: jest.fn().mockResolvedValue({
+          userId: "user_1",
+          revokedAt: null,
+          expiresAt: new Date(Date.now() + 60_000),
+        }),
+        create: jest.fn().mockResolvedValue({}),
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+      },
+    };
+    prisma.$transaction.mockImplementation((run: (client: typeof tx) => unknown) => run(tx));
+    const svc = new SessionService(prisma as never, config);
+
+    await svc.rotate("sess_1", user);
+
+    expect(tx.authSession.create.mock.calls[0][0].data.walletHash).toBe("sha256:wallet-a");
+  });
+
+  it("returns the bound wallet identity from validate", async () => {
+    const prisma = makePrismaMock();
+    prisma.authSession.findUnique.mockResolvedValue({
+      ...activeSession(),
+      walletHash: "sha256:wallet-a",
+    });
+    prisma.authSession.update.mockResolvedValue({});
+    const svc = new SessionService(prisma as never, config);
+
+    await expect(svc.validate(validToken)).resolves.toEqual({
+      sessionId: "sess_1",
+      userId: "user_1",
+      walletHash: "sha256:wallet-a",
+    });
+  });
+
+  it("returns null for a legacy session issued before binding existed", async () => {
+    const prisma = makePrismaMock();
+    prisma.authSession.findUnique.mockResolvedValue(activeSession());
+    prisma.authSession.update.mockResolvedValue({});
+    const svc = new SessionService(prisma as never, config);
+
+    await expect(svc.validate(validToken)).resolves.toMatchObject({ walletHash: null });
+  });
+});

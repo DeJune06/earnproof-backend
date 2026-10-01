@@ -28,7 +28,8 @@ export class AuthGuard implements CanActivate {
     const token = header.slice("Bearer ".length);
 
     // Validate the session — throws on malformed / expired / revoked tokens.
-    const { sessionId, userId } = await this.sessionService.validate(token);
+    const { sessionId, userId, walletHash } =
+      await this.sessionService.validate(token);
 
     // Fetch the live user record so the guard can enforce account status.
     const user = await this.prisma.user.findUnique({
@@ -48,6 +49,14 @@ export class AuthGuard implements CanActivate {
 
     if (!canAuthenticate(user.status)) {
       throw new UnauthorizedException("Account is not active");
+    }
+
+    // A session belongs to the wallet that signed in, not just the account.
+    // After a wallet rotation, a session issued to the previous wallet is
+    // refused even if it was created after the rotation revoked the others.
+    // Legacy sessions (issued before this binding existed) carry no hash.
+    if (walletHash && walletHash !== user.walletHash) {
+      throw new UnauthorizedException("Session is no longer valid");
     }
 
     const authenticatedSession: AuthenticatedSession = {

@@ -2,6 +2,8 @@ import { AuthEventType, VerificationOutcome } from "@prisma/client";
 import { Keypair } from "@stellar/stellar-base";
 import { ApiKeyService } from "../../api-keys/api-key.service";
 import { AuthAuditService } from "../../auth/auth-audit.service";
+import { WalletRotationService } from "../../auth/wallet-rotation.service";
+import { sep53MessageHash } from "../../auth/wallet-signature";
 import { VerificationEventService } from "../../audit/verification-event.service";
 import { IssuersService } from "../../issuers/issuers.service";
 import { OrganizationsService } from "../../organizations/organizations.service";
@@ -416,6 +418,60 @@ const scenarios: Scenario[] = [
         delivery as never,
         configDouble({ paymentEncryptionKey: "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=" }),
       ).replayDelivery(ORGANIZATION_ID, "delivery_1", USER_ID);
+    },
+  },
+  {
+    event: "authentication.wallet_rotated",
+    outcome: "success",
+    name: "rotating an account's wallet address",
+    run: (sink) => {
+      const currentKey = Keypair.fromRawEd25519Seed(Buffer.alloc(32, 3));
+      const replacementKey = Keypair.fromRawEd25519Seed(Buffer.alloc(32, 11));
+      const sign = (key: Keypair, message: string) =>
+        key.sign(sep53MessageHash(message)).toString("base64");
+      const rotation = {
+        id: "rotation_1",
+        userId: USER_ID,
+        currentWalletAddress: WALLET_ADDRESS,
+        newWalletAddress: replacementKey.publicKey(),
+        currentMessage: "current",
+        newMessage: "replacement",
+        networkPassphrase: "Test SDF Network ; September 2015",
+        origin: "http://localhost:3000",
+      };
+      const tx = {
+        user: {
+          findUnique: jest.fn().mockResolvedValue(null),
+          updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+        },
+        authSession: { updateMany: jest.fn().mockResolvedValue({ count: 2 }) },
+        walletRotation: {
+          update: jest.fn().mockResolvedValue({}),
+          updateMany: jest.fn().mockResolvedValue({ count: 0 }),
+        },
+        auditLog: sink.auditLog,
+      };
+      const prisma = {
+        walletRotation: {
+          updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+          findUnique: jest.fn().mockResolvedValue(rotation),
+        },
+        $transaction: jest.fn((run: (client: typeof tx) => unknown) => run(tx)),
+      };
+      return new WalletRotationService(
+        prisma as never,
+        configDouble({
+          appUrl: "http://localhost:3000",
+          "stellar.networkPassphrase": "Test SDF Network ; September 2015",
+        }),
+      ).complete(
+        { id: USER_ID, walletAddress: WALLET_ADDRESS, walletHash: "unused", role: "WORKER" },
+        "rotation_1",
+        {
+          currentSignature: sign(currentKey, rotation.currentMessage),
+          newSignature: sign(replacementKey, rotation.newMessage),
+        },
+      );
     },
   },
   // ------------------------------------------------------------ operator ---

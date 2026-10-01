@@ -25,7 +25,9 @@ const activeDbUser = {
 };
 
 function makeSessionServiceMock(
-  validateResult: { sessionId: string; userId: string } | Error,
+  validateResult:
+    | { sessionId: string; userId: string; walletHash?: string | null }
+    | Error,
 ) {
   return {
     validate: jest.fn().mockImplementation(() => {
@@ -210,5 +212,40 @@ describe("AuthGuard — valid session", () => {
       walletAddress: "G".padEnd(56, "A"),
       role: "WORKER",
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Wallet binding
+// ---------------------------------------------------------------------------
+
+describe("AuthGuard — wallet binding", () => {
+  it("admits a session bound to the account's current wallet", async () => {
+    const guard = new AuthGuard(
+      makeSessionServiceMock({ sessionId: "s", userId: "user_1", walletHash: "sha256:abc" }),
+      makePrismaMock() as never,
+    );
+
+    await expect(guard.canActivate(makeContext("Bearer valid.token"))).resolves.toBe(true);
+  });
+
+  it("refuses a session issued to a wallet the account no longer holds", async () => {
+    const guard = new AuthGuard(
+      makeSessionServiceMock({ sessionId: "s", userId: "user_1", walletHash: "sha256:previous" }),
+      makePrismaMock() as never,
+    );
+
+    await expect(guard.canActivate(makeContext("Bearer valid.token"))).rejects.toThrow(
+      "Session is no longer valid",
+    );
+  });
+
+  it("admits a legacy session that carries no wallet binding", async () => {
+    const guard = new AuthGuard(
+      makeSessionServiceMock({ sessionId: "s", userId: "user_1", walletHash: null }),
+      makePrismaMock() as never,
+    );
+
+    await expect(guard.canActivate(makeContext("Bearer valid.token"))).resolves.toBe(true);
   });
 });

@@ -67,13 +67,23 @@ Wallet-signature authentication and revocable sessions.
 
 | | |
 |---|---|
-| **Public interface** | `POST /auth/challenge`, `/auth/verify`, `/auth/logout`, `/auth/rotate`, `GET /auth/sessions` |
-| **Owned tables** | `WalletChallenge`, `AuthSession` |
-| **Key files** | [`auth.service.ts`](../src/auth/auth.service.ts), [`session.service.ts`](../src/auth/session.service.ts), [`auth-token.service.ts`](../src/auth/auth-token.service.ts), [`cleanup.job.ts`](../src/auth/cleanup.job.ts) |
+| **Public interface** | `POST /auth/challenge`, `/auth/verify`, `/auth/logout`, `/auth/rotate`, `GET /auth/sessions`, `POST /auth/wallet-rotation`, `/auth/wallet-rotation/:id/complete` |
+| **Owned tables** | `WalletChallenge`, `AuthSession`, `WalletRotation` |
+| **Key files** | [`auth.service.ts`](../src/auth/auth.service.ts), [`session.service.ts`](../src/auth/session.service.ts), [`wallet-rotation.service.ts`](../src/auth/wallet-rotation.service.ts), [`auth-token.service.ts`](../src/auth/auth-token.service.ts), [`cleanup.job.ts`](../src/auth/cleanup.job.ts) |
 | **Must not depend on** | `proofs`, `payments`, `credentials`, `webhooks` |
 
 Only a SHA-256 hash of the bearer token is stored. The raw token exists in the
 response body and nowhere else — not in the database, not in a log.
+
+A session is bound to the wallet it was issued to (`AuthSession.walletHash`),
+and `AuthGuard` refuses one whose wallet no longer matches the account. Wallet
+rotation therefore ends every session of the previous wallet structurally, not
+only through the revocation it performs: a session inserted by a login that
+raced the rotation is refused as well. Rotation requires fresh signatures from
+both the current and the replacement key over messages bound to the network,
+the origin and a single-use nonce; the rotation is consumed before either
+signature is checked, and the identity change, session revocation and audit
+record commit together.
 
 ### `api-keys` — [`src/api-keys/`](../src/api-keys/)
 

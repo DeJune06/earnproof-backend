@@ -5,8 +5,8 @@ import {
 } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { AuthEventType } from "@prisma/client";
-import { Keypair, StrKey } from "@stellar/stellar-base";
-import { createHash, randomBytes } from "crypto";
+import { randomBytes } from "crypto";
+import { isValidWalletAddress, verifyWalletSignature } from "./wallet-signature";
 import { Logger } from "@nestjs/common";
 import { PrismaService } from "../database/prisma.service";
 import { sha256 } from "../common/crypto/hash";
@@ -389,29 +389,11 @@ export class AuthService {
     message: string,
     signature: string,
   ) {
-    const signatureBuffer = this.decodeSignature(signature);
-    return Keypair.fromPublicKey(walletAddress).verify(
-      this.sep53MessageHash(message),
-      signatureBuffer,
-    );
-  }
-
-  private sep53MessageHash(message: string) {
-    return createHash("sha256")
-      .update("Stellar Signed Message:\n", "utf8")
-      .update(message, "utf8")
-      .digest();
-  }
-
-  private decodeSignature(signature: string) {
-    if (/^[a-f0-9]+$/i.test(signature) && signature.length % 2 === 0) {
-      return Buffer.from(signature, "hex");
-    }
-    return Buffer.from(signature, "base64");
+    return verifyWalletSignature(walletAddress, message, signature);
   }
 
   private assertValidPublicKey(walletAddress: string) {
-    if (!StrKey.isValidEd25519PublicKey(walletAddress)) {
+    if (!isValidWalletAddress(walletAddress)) {
       throw new BadRequestException("Invalid Stellar public key");
     }
   }

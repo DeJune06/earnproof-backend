@@ -129,6 +129,13 @@ enum IdempotencyStatus {
   FAILED
 }
 
+enum WalletRotationStatus {
+  PENDING
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
 enum SharingOutcome {
   ACCEPTED
   REJECTED
@@ -252,6 +259,7 @@ model User {
   proofs             Proof[]
   createdApiKeys     ApiKey[]
   sessions           AuthSession[]
+  walletRotations    WalletRotation[]
   organizationMemberships OrganizationMember[] @relation("organizationMemberships")
   paymentBackfillJobs PaymentBackfillJob[]
   organizationMemberships OrganizationMember[]
@@ -284,6 +292,22 @@ model WalletChallenge {
 model AuthSession {
   id                String       @id @default(cuid())
   /// SHA-256 hex digest of the raw opaque session token.
+  tokenHash   String    @unique
+  userId      String
+  user        User      @relation(fields: [userId], references: [id])
+  /// Wallet identity (User.walletHash) the session was issued to. A session
+  /// whose wallet no longer matches the account is refused. Null for sessions
+  /// issued before wallet rotation existed.
+  walletHash  String?
+  createdAt   DateTime  @default(now())
+  expiresAt   DateTime
+  lastUsedAt  DateTime?
+  tokenHash          String    @unique
+  userId             String
+  user               User      @relation(fields: [userId], references: [id])
+  createdAt          DateTime  @default(now())
+  expiresAt          DateTime
+  lastUsedAt         DateTime?
   tokenHash         String       @unique
   userId            String
   user              User         @relation(fields: [userId], references: [id])
@@ -305,6 +329,36 @@ model AuthSession {
   @@index([expiresAt])
   @@index([revokedAt])
   @@index([deviceFingerprint])
+}
+
+/// One-time wallet address rotation.
+///
+/// Both the current and the replacement key sign distinct messages bound to
+/// the network, the application origin and a single-use nonce; the nonce's
+/// hash is unique across rotations. A rotation is consumed before its
+/// signatures are checked, so it can be attempted at most once; the account's
+/// identity changes only when both signatures verify.
+model WalletRotation {
+  id                   String               @id @default(cuid())
+  userId               String
+  user                 User                 @relation(fields: [userId], references: [id])
+  currentWalletAddress String
+  newWalletAddress     String
+  nonceHash            String               @unique
+  currentMessage       String
+  newMessage           String
+  networkPassphrase    String
+  origin               String
+  status               WalletRotationStatus @default(PENDING)
+  /// Bounded failure code; never a signature or raw error.
+  failureReason        String?
+  expiresAt            DateTime
+  consumedAt           DateTime?
+  completedAt          DateTime?
+  createdAt            DateTime             @default(now())
+
+  @@index([userId, status])
+  @@index([expiresAt])
 }
 
 model Organization {
